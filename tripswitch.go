@@ -1,11 +1,16 @@
 package tripswitch
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
-	"encoding/json" // Added for JSON unmarshalling
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"math/rand/v2"
+	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/r3labs/sse/v2"
@@ -15,6 +20,16 @@ import (
 type breakerState struct {
 	State     string  // "open", "closed", "half_open"
 	AllowRate float64 // 0.0 to 1.0
+}
+
+// reportEntry represents a single sample to be reported.
+type reportEntry struct {
+	Name      string            `json:"name"`
+	OK        bool              `json:"ok"`
+	Value     float64           `json:"value"`
+	TraceID   string            `json:"trace_id,omitempty"`
+	Tags      map[string]string `json:"tags,omitempty"`
+	Timestamp time.Time         `json:"timestamp"`
 }
 
 // Client is the main tripswitch client.
@@ -47,11 +62,16 @@ type Client struct {
 	}
 
 	// for SSE state sync
-	breakerStates     map[string]breakerState
-	breakerStatesMu   sync.RWMutex
-	sseReady          chan struct{} // Closed when initial SSE sync is complete
-	sseClient         *sse.Client
-	sseEventURL       string
+	breakerStates   map[string]breakerState
+	breakerStatesMu sync.RWMutex
+	sseReady        chan struct{} // Closed when initial SSE sync is complete
+	sseClient       *sse.Client
+	sseEventURL     string
+
+	// for report buffering
+	reportChan     chan reportEntry
+	droppedSamples uint64 // atomic counter for dropped samples
+	httpClient     *http.Client
 }
 
 // Option is a functional option for configuring the client.
@@ -61,12 +81,14 @@ type Option func(*Client)
 func NewClient(projectID string, opts ...Option) *Client {
 	// Default client
 	c := &Client{
-		projectID: projectID,
-		failOpen:  true,
-		baseURL:   "https://api.tripswitch.dev",
-		logger:    slog.Default(),
+		projectID:     projectID,
+		failOpen:      true,
+		baseURL:       "https://api.tripswitch.dev",
+		logger:        slog.Default(),
 		breakerStates: make(map[string]breakerState),
 		sseReady:      make(chan struct{}),
+		reportChan:    make(chan reportEntry, 10000),
+		httpClient:    &http.Client{Timeout: 30 * time.Second},
 	}
 
 	for _, opt := range opts {
@@ -77,6 +99,7 @@ func NewClient(projectID string, opts ...Option) *Client {
 	c.sseEventURL = c.baseURL + "/v1/projects/" + c.projectID + "/breakers/state:stream"
 
 	go c.startSSEListener()
+	go c.startFlusher()
 
 	return c
 }
@@ -175,6 +198,49 @@ func WithGlobalTags(tags map[string]string) Option {
 				c.globalTags[k] = v
 			}
 		}
+	}
+}
+
+// executeConfig holds per-call configuration for Execute.
+type executeConfig struct {
+	ignoreErrors   []error
+	errorEvaluator func(error) bool
+	traceID        string
+	tags           map[string]string
+}
+
+// ExecuteOption configures a single Execute call.
+type ExecuteOption func(*executeConfig)
+
+// WithIgnoreErrors specifies errors that should not count as failures.
+func WithIgnoreErrors(errs ...error) ExecuteOption {
+	return func(cfg *executeConfig) {
+		cfg.ignoreErrors = errs
+	}
+}
+
+// WithErrorEvaluator sets a custom function to determine if an error is a failure.
+// If set, this takes precedence over WithIgnoreErrors.
+// Return true if the error should count as a failure.
+func WithErrorEvaluator(f func(error) bool) ExecuteOption {
+	return func(cfg *executeConfig) {
+		cfg.errorEvaluator = f
+	}
+}
+
+// WithTags sets diagnostic tags for this specific Execute call.
+// These are merged with global tags, with call-site tags taking precedence.
+func WithTags(tags map[string]string) ExecuteOption {
+	return func(cfg *executeConfig) {
+		cfg.tags = tags
+	}
+}
+
+// WithTraceID sets a specific trace ID for this Execute call.
+// This takes precedence over the client's TraceIDExtractor.
+func WithTraceID(traceID string) ExecuteOption {
+	return func(cfg *executeConfig) {
+		cfg.traceID = traceID
 	}
 }
 
@@ -304,4 +370,246 @@ func (c *Client) Ready(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// Execute wraps a task with circuit breaker logic.
+// It checks the breaker state, runs the task if allowed, and reports the result.
+// This is a package-level generic function because Go does not support generic methods.
+func Execute[T any](c *Client, ctx context.Context, name string, task func() (T, error), opts ...ExecuteOption) (T, error) {
+	var zero T
+
+	// Check context first
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+
+	// Check breaker state
+	if !c.isAllowed(name) {
+		return zero, ErrOpen
+	}
+
+	// Apply options
+	cfg := executeConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	// Run task
+	startTime := time.Now()
+	result, err := task()
+
+	// Determine if this is a failure
+	ok := !c.isFailure(err, cfg)
+
+	// Resolve TraceID: option > extractor > empty
+	traceID := cfg.traceID
+	if traceID == "" && c.traceExtractor != nil {
+		traceID = c.traceExtractor(ctx)
+	}
+
+	// Fire-and-forget report
+	c.report(reportEntry{
+		Name:      name,
+		OK:        ok,
+		Value:     1.0,
+		TraceID:   traceID,
+		Tags:      c.mergeTags(cfg.tags),
+		Timestamp: startTime,
+	})
+
+	return result, err
+}
+
+// isAllowed checks if a request to the named breaker should be allowed.
+func (c *Client) isAllowed(name string) bool {
+	c.breakerStatesMu.RLock()
+	state, exists := c.breakerStates[name]
+	c.breakerStatesMu.RUnlock()
+
+	// Fail-open: if breaker not in cache, allow
+	if !exists {
+		return true
+	}
+
+	switch state.State {
+	case "closed":
+		return true
+	case "open":
+		return false
+	case "half_open":
+		// Throttle via dice roll
+		allowed := rand.Float64() < state.AllowRate
+		if !allowed {
+			c.logger.Debug("request throttled in half-open", "breaker", name, "allowRate", state.AllowRate)
+		}
+		return allowed
+	default:
+		// Unknown state, fail-open
+		return true
+	}
+}
+
+// isFailure determines if an error should count as a failure.
+func (c *Client) isFailure(err error, cfg executeConfig) bool {
+	// No error = not a failure
+	if err == nil {
+		return false
+	}
+
+	// Custom evaluator takes precedence
+	if cfg.errorEvaluator != nil {
+		return cfg.errorEvaluator(err)
+	}
+
+	// Check ignore list
+	for _, ignored := range cfg.ignoreErrors {
+		if errors.Is(err, ignored) {
+			return false
+		}
+	}
+
+	// Default: any error is a failure
+	return true
+}
+
+// mergeTags merges global tags with dynamic tags.
+// Dynamic tags override global tags on conflict.
+func (c *Client) mergeTags(dynamic map[string]string) map[string]string {
+	// Optimization: avoid allocation when possible
+	if len(dynamic) == 0 {
+		return c.globalTags
+	}
+	if len(c.globalTags) == 0 {
+		return dynamic
+	}
+
+	// Merge with pre-sized map
+	merged := make(map[string]string, len(c.globalTags)+len(dynamic))
+	for k, v := range c.globalTags {
+		merged[k] = v
+	}
+	for k, v := range dynamic {
+		merged[k] = v // dynamic wins on conflict
+	}
+	return merged
+}
+
+// report sends a sample to the report buffer (fire-and-forget).
+func (c *Client) report(entry reportEntry) {
+	select {
+	case c.reportChan <- entry:
+		// sent successfully
+	default:
+		// channel full, drop and count
+		atomic.AddUint64(&c.droppedSamples, 1)
+	}
+}
+
+// startFlusher runs the background batch flusher.
+func (c *Client) startFlusher() {
+	c.wg.Add(1)
+	defer c.wg.Done()
+
+	batch := make([]reportEntry, 0, 500)
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		// Add to WaitGroup before spawning goroutine
+		c.wg.Add(1)
+		go func(b []reportEntry) {
+			defer c.wg.Done()
+			c.sendBatch(b)
+		}(batch)
+		batch = make([]reportEntry, 0, 500)
+		ticker.Reset(15 * time.Second)
+	}
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			flush() // Final drain on shutdown
+			return
+		case entry := <-c.reportChan:
+			batch = append(batch, entry)
+			if len(batch) >= 500 {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		}
+	}
+}
+
+// sendBatch sends a batch of samples to the ingest endpoint.
+func (c *Client) sendBatch(batch []reportEntry) {
+	if len(batch) == 0 {
+		return
+	}
+
+	// Marshal to JSON
+	data, err := json.Marshal(batch)
+	if err != nil {
+		c.logger.Error("failed to marshal batch", "error", err)
+		atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
+		return
+	}
+
+	// GZIP compress
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(data); err != nil {
+		c.logger.Error("failed to gzip batch", "error", err)
+		atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
+		return
+	}
+	if err := gz.Close(); err != nil {
+		c.logger.Error("failed to close gzip writer", "error", err)
+		atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
+		return
+	}
+
+	// Exponential backoff: 100ms, 400ms, 1s (max 3 retries)
+	backoffs := []time.Duration{100 * time.Millisecond, 400 * time.Millisecond, 1 * time.Second}
+	url := c.baseURL + "/v1/projects/" + c.projectID + "/samples"
+
+	for attempt := 0; attempt <= len(backoffs); attempt++ {
+		if attempt > 0 {
+			time.Sleep(backoffs[attempt-1])
+		}
+
+		req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, url, bytes.NewReader(buf.Bytes()))
+		if err != nil {
+			c.logger.Error("failed to create request", "error", err)
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Encoding", "gzip")
+		if c.ingestKey != "" {
+			req.Header.Set("Authorization", "Bearer "+c.ingestKey)
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			c.logger.Error("failed to send batch", "error", err, "attempt", attempt+1)
+			continue
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			c.stats.mu.Lock()
+			c.stats.lastSuccessfulFlush = time.Now()
+			c.stats.mu.Unlock()
+			return // Success
+		}
+
+		c.logger.Error("batch request failed", "status", resp.StatusCode, "attempt", attempt+1)
+	}
+
+	// All retries exhausted
+	c.logger.Error("dropping batch after retries exhausted", "count", len(batch))
+	atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
 }
