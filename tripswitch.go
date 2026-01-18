@@ -148,7 +148,12 @@ func WithTraceIDExtractor(f func(ctx context.Context) string) Option {
 // by the client.
 func WithGlobalTags(tags map[string]string) Option {
 	return func(c *Client) {
-		c.globalTags = tags
+		if tags != nil {
+			c.globalTags = make(map[string]string, len(tags))
+			for k, v := range tags {
+				c.globalTags[k] = v
+			}
+		}
 	}
 }
 

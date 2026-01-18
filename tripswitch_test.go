@@ -3,6 +3,7 @@ package tripswitch
 import (
 	"context"
 	"errors"
+	"fmt" // Added for fmt.Errorf
 	"testing"
 )
 
@@ -113,5 +114,10 @@ func TestIsBreakerError(t *testing.T) {
 	}
 	if IsBreakerError(errors.New("some other error")) {
 		t.Errorf("expected IsBreakerError(another_error) to be false")
+	}
+
+	wrappedErr := fmt.Errorf("outer error: %w", ErrOpen) // Correct way to wrap
+	if !IsBreakerError(wrappedErr) {
+		t.Errorf("expected IsBreakerError to detect wrapped ErrOpen")
 	}
 }
