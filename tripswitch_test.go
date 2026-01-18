@@ -61,7 +61,11 @@ func TestNewClient(t *testing.T) {
 		WithTraceIDExtractor(extractor),
 		WithOnStateChange(func(name, from, to string) {}),
 	)
-	defer ts.Close()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ts.Close(ctx)
+	}()
 
 	if ts.projectID != projectID {
 		t.Errorf("expected projectID %q, got %q", projectID, ts.projectID)
@@ -93,7 +97,11 @@ func TestNewClient(t *testing.T) {
 
 	// Test default values with mock server
 	tsDefault := NewClient("proj_456", WithBaseURL(server.URL))
-	defer tsDefault.Close()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		tsDefault.Close(ctx)
+	}()
 
 	if tsDefault.failOpen != true {
 		t.Errorf("expected failOpen to be true by default")
@@ -133,13 +141,16 @@ func TestClose(t *testing.T) {
 	defer cancel()
 	_ = ts.Ready(ctx) // Ignore error - just ensuring connection attempt completes
 
-	err := ts.Close()
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer closeCancel()
+
+	err := ts.Close(closeCtx)
 	if err != nil {
 		t.Fatalf("Close() returned an error: %v", err)
 	}
 
 	// Calling it again should be a no-op and not block.
-	err = ts.Close()
+	err = ts.Close(closeCtx)
 	if err != nil {
 		t.Fatalf("second call to Close() returned an error: %v", err)
 	}
@@ -161,7 +172,11 @@ func TestStats(t *testing.T) {
 	defer server.Close()
 
 	ts := NewClient("proj_abc", WithBaseURL(server.URL))
-	defer ts.Close()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ts.Close(ctx)
+	}()
 
 	ts.stats.mu.Lock()
 	ts.stats.droppedSamples = 5
@@ -221,7 +236,11 @@ func TestReady(t *testing.T) {
 	defer ts.Close()
 
 	client := NewClient("proj_test", WithBaseURL(ts.URL))
-	defer client.Close()
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		client.Close(closeCtx)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -262,7 +281,9 @@ func newTestClient(t *testing.T, opts ...Option) (*Client, func()) {
 	client := NewClient("proj_test", allOpts...)
 
 	cleanup := func() {
-		client.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client.Close(ctx)
 		server.Close()
 	}
 	return client, cleanup
@@ -654,7 +675,11 @@ func TestSendBatch_PayloadFormat(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient("proj_test", WithBaseURL(server.URL), WithIngestKey("ik_test"))
-	defer client.Close()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client.Close(ctx)
+	}()
 
 	// Send a batch directly
 	testTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
