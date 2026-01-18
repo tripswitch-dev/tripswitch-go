@@ -32,6 +32,12 @@ type reportEntry struct {
 	Timestamp time.Time         `json:"timestamp"`
 }
 
+// batchPayload is the wire format for sending samples to the ingest endpoint.
+type batchPayload struct {
+	ProjectID string        `json:"project_id"`
+	Samples   []reportEntry `json:"samples"`
+}
+
 // Client is the main tripswitch client.
 type Client struct {
 	projectID      string
@@ -550,8 +556,14 @@ func (c *Client) sendBatch(batch []reportEntry) {
 		return
 	}
 
+	// Wrap in payload format
+	payload := batchPayload{
+		ProjectID: c.projectID,
+		Samples:   batch,
+	}
+
 	// Marshal to JSON
-	data, err := json.Marshal(batch)
+	data, err := json.Marshal(payload)
 	if err != nil {
 		c.logger.Error("failed to marshal batch", "error", err)
 		atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
@@ -577,8 +589,21 @@ func (c *Client) sendBatch(batch []reportEntry) {
 	url := c.baseURL + "/v1/projects/" + c.projectID + "/samples"
 
 	for attempt := 0; attempt <= len(backoffs); attempt++ {
+		// Don't retry if context is cancelled (shutdown in progress)
+		if c.ctx.Err() != nil {
+			c.logger.Debug("batch send cancelled due to shutdown", "remaining", len(batch))
+			atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
+			return
+		}
+
 		if attempt > 0 {
-			time.Sleep(backoffs[attempt-1])
+			select {
+			case <-time.After(backoffs[attempt-1]):
+			case <-c.ctx.Done():
+				c.logger.Debug("batch send cancelled during backoff", "remaining", len(batch))
+				atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
+				return
+			}
 		}
 
 		req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, url, bytes.NewReader(buf.Bytes()))
@@ -594,7 +619,10 @@ func (c *Client) sendBatch(batch []reportEntry) {
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			c.logger.Error("failed to send batch", "error", err, "attempt", attempt+1)
+			// Don't log error if context was cancelled
+			if c.ctx.Err() == nil {
+				c.logger.Error("failed to send batch", "error", err, "attempt", attempt+1)
+			}
 			continue
 		}
 		resp.Body.Close()

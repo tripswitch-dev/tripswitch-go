@@ -1,12 +1,14 @@
 package tripswitch
 
 import (
+	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic" // Needed for atomic operations in mockLogger and potentially for tests
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -124,6 +126,13 @@ func TestClose(t *testing.T) {
 	defer server.Close()
 
 	ts := NewClient("proj_abc", WithBaseURL(server.URL))
+
+	// Wait for SSE connection to be established before closing
+	// This avoids race condition where Close() is called while SSE is still connecting
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = ts.Ready(ctx) // Ignore error - just ensuring connection attempt completes
+
 	err := ts.Close()
 	if err != nil {
 		t.Fatalf("Close() returned an error: %v", err)
@@ -600,5 +609,100 @@ func TestIsAllowed(t *testing.T) {
 
 	if !client.isAllowed("unknown-state") {
 		t.Error("expected fail-open for unknown state")
+	}
+}
+
+func TestSendBatch_PayloadFormat(t *testing.T) {
+	var receivedPayload batchPayload
+	var receivedEncoding string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check for SSE endpoint vs samples endpoint
+		if r.URL.Path != "/v1/projects/proj_test/samples" {
+			// SSE endpoint - keep alive
+			flusher, ok := w.(http.Flusher)
+			if !ok {
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintf(w, "data: {\"breaker\": \"test\", \"state\": \"closed\", \"allow_rate\": 1.0}\n\n")
+			flusher.Flush()
+			<-r.Context().Done()
+			return
+		}
+
+		// Samples endpoint
+		receivedEncoding = r.Header.Get("Content-Encoding")
+
+		// Decompress GZIP
+		gr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Errorf("failed to create gzip reader: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer gr.Close()
+
+		if err := json.NewDecoder(gr).Decode(&receivedPayload); err != nil {
+			t.Errorf("failed to decode payload: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewClient("proj_test", WithBaseURL(server.URL), WithIngestKey("ik_test"))
+	defer client.Close()
+
+	// Send a batch directly
+	testTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	batch := []reportEntry{
+		{
+			Name:      "checkout",
+			OK:        true,
+			Value:     1.0,
+			TraceID:   "abc123",
+			Tags:      map[string]string{"tier": "premium"},
+			Timestamp: testTime,
+		},
+		{
+			Name:      "checkout",
+			OK:        false,
+			Value:     1.0,
+			TraceID:   "def456",
+			Tags:      map[string]string{"tier": "free"},
+			Timestamp: testTime.Add(time.Second),
+		},
+	}
+
+	client.sendBatch(batch)
+
+	// Verify payload format
+	if receivedEncoding != "gzip" {
+		t.Errorf("expected Content-Encoding: gzip, got %q", receivedEncoding)
+	}
+
+	if receivedPayload.ProjectID != "proj_test" {
+		t.Errorf("expected project_id 'proj_test', got %q", receivedPayload.ProjectID)
+	}
+
+	if len(receivedPayload.Samples) != 2 {
+		t.Fatalf("expected 2 samples, got %d", len(receivedPayload.Samples))
+	}
+
+	sample := receivedPayload.Samples[0]
+	if sample.Name != "checkout" {
+		t.Errorf("expected name 'checkout', got %q", sample.Name)
+	}
+	if !sample.OK {
+		t.Error("expected first sample OK to be true")
+	}
+	if sample.TraceID != "abc123" {
+		t.Errorf("expected trace_id 'abc123', got %q", sample.TraceID)
+	}
+	if sample.Tags["tier"] != "premium" {
+		t.Errorf("expected tier 'premium', got %q", sample.Tags["tier"])
 	}
 }
