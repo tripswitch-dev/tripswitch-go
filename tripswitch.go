@@ -589,8 +589,21 @@ func (c *Client) sendBatch(batch []reportEntry) {
 	url := c.baseURL + "/v1/projects/" + c.projectID + "/samples"
 
 	for attempt := 0; attempt <= len(backoffs); attempt++ {
+		// Don't retry if context is cancelled (shutdown in progress)
+		if c.ctx.Err() != nil {
+			c.logger.Debug("batch send cancelled due to shutdown", "remaining", len(batch))
+			atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
+			return
+		}
+
 		if attempt > 0 {
-			time.Sleep(backoffs[attempt-1])
+			select {
+			case <-time.After(backoffs[attempt-1]):
+			case <-c.ctx.Done():
+				c.logger.Debug("batch send cancelled during backoff", "remaining", len(batch))
+				atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
+				return
+			}
 		}
 
 		req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, url, bytes.NewReader(buf.Bytes()))
@@ -606,7 +619,10 @@ func (c *Client) sendBatch(batch []reportEntry) {
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			c.logger.Error("failed to send batch", "error", err, "attempt", attempt+1)
+			// Don't log error if context was cancelled
+			if c.ctx.Err() == nil {
+				c.logger.Error("failed to send batch", "error", err, "attempt", attempt+1)
+			}
 			continue
 		}
 		resp.Body.Close()
