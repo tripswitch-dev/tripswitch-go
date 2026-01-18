@@ -32,6 +32,12 @@ type reportEntry struct {
 	Timestamp time.Time         `json:"timestamp"`
 }
 
+// batchPayload is the wire format for sending samples to the ingest endpoint.
+type batchPayload struct {
+	ProjectID string        `json:"project_id"`
+	Samples   []reportEntry `json:"samples"`
+}
+
 // Client is the main tripswitch client.
 type Client struct {
 	projectID      string
@@ -550,8 +556,14 @@ func (c *Client) sendBatch(batch []reportEntry) {
 		return
 	}
 
+	// Wrap in payload format
+	payload := batchPayload{
+		ProjectID: c.projectID,
+		Samples:   batch,
+	}
+
 	// Marshal to JSON
-	data, err := json.Marshal(batch)
+	data, err := json.Marshal(payload)
 	if err != nil {
 		c.logger.Error("failed to marshal batch", "error", err)
 		atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
