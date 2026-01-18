@@ -58,14 +58,14 @@ func (c *Client) Ready(ctx context.Context) error
 
 func (c *Client) Execute[T any](ctx context.Context, name string, task func() (T, error), opts ...ExecuteOption) (T, error)
 
-func (c *Client) Close() error
+func (c *Client) Close(ctx context.Context) error
 
 func (c *Client) Stats() SDKStats
 ```
 
 - `Ready` blocks until SSE handshake completes (ensures state is synced before taking traffic)
 - `Execute` is the primary public method
-- `Close` is required for graceful shutdown
+- `Close` is required for graceful shutdown; the context controls how long to wait for flush
 - `Stats` returns SDK health metrics
 - `Report` is internal, called automatically by `Execute`
 - `IsAllowed` is internal, called by `Execute`
@@ -250,10 +250,10 @@ For **metric breakers** (avg, p95, latency, etc.), samples come from:
 
 ## Close
 
-Required for graceful shutdown.
+Required for graceful shutdown. The provided context controls how long to wait for the flush to complete.
 
 ```go
-func (c *Client) Close() error
+func (c *Client) Close(ctx context.Context) error
 ```
 
 ### Behavior
@@ -273,7 +273,7 @@ type Client struct {
     // ...
 }
 
-func (c *Client) Close() error {
+func (c *Client) Close(ctx context.Context) error {
     var err error
     c.closeOnce.Do(func() {
         // Signal all goroutines to stop
@@ -288,9 +288,9 @@ func (c *Client) Close() error {
 
         select {
         case <-done:
-            err = nil
-        case <-time.After(5 * time.Second):
-            err = errors.New("tripswitch: close timed out waiting for flush")
+            // finished gracefully
+        case <-ctx.Done():
+            err = fmt.Errorf("tripswitch: close interrupted waiting for flush: %w", ctx.Err())
         }
     })
     return err
@@ -301,7 +301,12 @@ func (c *Client) Close() error {
 
 ```go
 ts := tripswitch.NewClient("proj_abc123", ...)
-defer ts.Close()
+defer ts.Close(context.Background())
+
+// Or with a timeout:
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+ts.Close(ctx)
 ```
 
 ---

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
@@ -261,7 +262,8 @@ func IsBreakerError(err error) bool {
 }
 
 // Close gracefully shuts down the client, flushing any buffered samples.
-func (c *Client) Close() error {
+// The provided context controls how long to wait for the flush to complete.
+func (c *Client) Close(ctx context.Context) error {
 	var err error
 	c.closeOnce.Do(func() {
 		// Signal all goroutines to stop
@@ -277,8 +279,8 @@ func (c *Client) Close() error {
 		select {
 		case <-done:
 			// finished gracefully
-		case <-time.After(5 * time.Second):
-			err = errors.New("tripswitch: close timed out waiting for flush")
+		case <-ctx.Done():
+			err = fmt.Errorf("tripswitch: close interrupted waiting for flush: %w", ctx.Err())
 		}
 	})
 	return err
