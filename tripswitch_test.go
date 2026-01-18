@@ -28,10 +28,23 @@ func (m *mockLogger) LastMsg() string {
 }
 
 func TestNewClient(t *testing.T) {
+	// Start a mock SSE server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: {\"breaker\": \"test\", \"state\": \"closed\", \"allow_rate\": 1.0}\n\n")
+		flusher.Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
 	projectID := "proj_123"
 	apiKey := "sk_abc"
 	ingestKey := "ik_def"
-	baseURL := "https://example.com"
 	logger := &mockLogger{}
 	tags := map[string]string{"env": "testing"}
 	extractor := func(ctx context.Context) string { return "trace-id" }
@@ -40,12 +53,13 @@ func TestNewClient(t *testing.T) {
 		WithAPIKey(apiKey),
 		WithIngestKey(ingestKey),
 		WithFailOpen(false),
-		WithBaseURL(baseURL),
+		WithBaseURL(server.URL),
 		WithLogger(logger),
 		WithGlobalTags(tags),
 		WithTraceIDExtractor(extractor),
 		WithOnStateChange(func(name, from, to string) {}),
 	)
+	defer ts.Close()
 
 	if ts.projectID != projectID {
 		t.Errorf("expected projectID %q, got %q", projectID, ts.projectID)
@@ -59,8 +73,8 @@ func TestNewClient(t *testing.T) {
 	if ts.failOpen != false {
 		t.Errorf("expected failOpen to be false")
 	}
-	if ts.baseURL != baseURL {
-		t.Errorf("expected baseURL %q, got %q", baseURL, ts.baseURL)
+	if ts.baseURL != server.URL {
+		t.Errorf("expected baseURL %q, got %q", server.URL, ts.baseURL)
 	}
 	if ts.logger != logger {
 		t.Errorf("expected logger to be set")
@@ -75,13 +89,12 @@ func TestNewClient(t *testing.T) {
 		t.Errorf("expected onStateChange to be set")
 	}
 
-	// Test default values
-	tsDefault := NewClient("proj_456")
+	// Test default values with mock server
+	tsDefault := NewClient("proj_456", WithBaseURL(server.URL))
+	defer tsDefault.Close()
+
 	if tsDefault.failOpen != true {
 		t.Errorf("expected failOpen to be true by default")
-	}
-	if tsDefault.baseURL != "https://api.tripswitch.dev" {
-		t.Errorf("expected default baseURL, got %q", tsDefault.baseURL)
 	}
 	if tsDefault.logger == nil {
 		t.Errorf("expected default logger to be non-nil")
@@ -89,7 +102,28 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	ts := NewClient("proj_abc")
+	// Start a mock SSE server that keeps connection open
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		// Send initial event to signal ready
+		fmt.Fprintf(w, "data: {\"breaker\": \"test\", \"state\": \"closed\", \"allow_rate\": 1.0}\n\n")
+		flusher.Flush()
+
+		// Wait until client disconnects
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ts := NewClient("proj_abc", WithBaseURL(server.URL))
 	err := ts.Close()
 	if err != nil {
 		t.Fatalf("Close() returned an error: %v", err)
@@ -103,7 +137,23 @@ func TestClose(t *testing.T) {
 }
 
 func TestStats(t *testing.T) {
-	ts := NewClient("proj_abc")
+	// Start a mock SSE server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: {\"breaker\": \"test\", \"state\": \"closed\", \"allow_rate\": 1.0}\n\n")
+		flusher.Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ts := NewClient("proj_abc", WithBaseURL(server.URL))
+	defer ts.Close()
+
 	ts.stats.mu.Lock()
 	ts.stats.droppedSamples = 5
 	ts.stats.sseConnected = true
@@ -180,5 +230,375 @@ func TestReady(t *testing.T) {
 
 	if !ok || state.State != "closed" || state.AllowRate != 1.0 {
 		t.Errorf("expected test-breaker state to be closed with allow_rate 1.0, got %+v", state)
+	}
+}
+
+// newTestClient creates a client with a mock SSE server for testing.
+// The returned cleanup function must be called to close both the client and server.
+func newTestClient(t *testing.T, opts ...Option) (*Client, func()) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: {\"breaker\": \"test\", \"state\": \"closed\", \"allow_rate\": 1.0}\n\n")
+		flusher.Flush()
+		<-r.Context().Done()
+	}))
+
+	allOpts := append([]Option{WithBaseURL(server.URL)}, opts...)
+	client := NewClient("proj_test", allOpts...)
+
+	cleanup := func() {
+		client.Close()
+		server.Close()
+	}
+	return client, cleanup
+}
+
+func TestExecute_ClosedBreaker(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Breaker not in cache = fail-open (allowed)
+	result, err := Execute(client, context.Background(), "unknown-breaker", func() (string, error) {
+		return "success", nil
+	})
+
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+	if result != "success" {
+		t.Errorf("expected result 'success', got %q", result)
+	}
+}
+
+func TestExecute_OpenBreaker(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Set breaker to open state
+	client.breakerStatesMu.Lock()
+	client.breakerStates["test-breaker"] = breakerState{State: "open", AllowRate: 0}
+	client.breakerStatesMu.Unlock()
+
+	result, err := Execute(client, context.Background(), "test-breaker", func() (string, error) {
+		t.Error("task should not be executed when breaker is open")
+		return "should-not-run", nil
+	})
+
+	if !errors.Is(err, ErrOpen) {
+		t.Errorf("expected ErrOpen, got %v", err)
+	}
+	if result != "" {
+		t.Errorf("expected empty result, got %q", result)
+	}
+}
+
+func TestExecute_HalfOpenBreaker(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Set breaker to half-open with 0% allow rate (always throttled)
+	client.breakerStatesMu.Lock()
+	client.breakerStates["throttled-breaker"] = breakerState{State: "half_open", AllowRate: 0}
+	client.breakerStatesMu.Unlock()
+
+	_, err := Execute(client, context.Background(), "throttled-breaker", func() (string, error) {
+		t.Error("task should not be executed when throttled")
+		return "should-not-run", nil
+	})
+
+	if !errors.Is(err, ErrOpen) {
+		t.Errorf("expected ErrOpen for throttled request, got %v", err)
+	}
+
+	// Set breaker to half-open with 100% allow rate (always allowed)
+	client.breakerStatesMu.Lock()
+	client.breakerStates["allowed-breaker"] = breakerState{State: "half_open", AllowRate: 1.0}
+	client.breakerStatesMu.Unlock()
+
+	result, err := Execute(client, context.Background(), "allowed-breaker", func() (string, error) {
+		return "allowed", nil
+	})
+
+	if err != nil {
+		t.Errorf("expected no error for allowed request, got %v", err)
+	}
+	if result != "allowed" {
+		t.Errorf("expected result 'allowed', got %q", result)
+	}
+}
+
+func TestExecute_ContextCanceled(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err := Execute(client, ctx, "test-breaker", func() (string, error) {
+		t.Error("task should not be executed when context is canceled")
+		return "should-not-run", nil
+	})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestExecute_WithIgnoreErrors(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	errNotFound := errors.New("not found")
+
+	// Execute with ignored error - should report as OK
+	_, err := Execute(client, context.Background(), "test-breaker", func() (string, error) {
+		return "", errNotFound
+	}, WithIgnoreErrors(errNotFound))
+
+	if !errors.Is(err, errNotFound) {
+		t.Errorf("expected errNotFound to be returned, got %v", err)
+	}
+
+	// Check that a sample was reported (drain the channel)
+	select {
+	case entry := <-client.reportChan:
+		if !entry.OK {
+			t.Error("expected ignored error to be reported as OK")
+		}
+	default:
+		t.Error("expected a report entry")
+	}
+}
+
+func TestExecute_WithErrorEvaluator(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Custom evaluator that considers even numbered errors as non-failures
+	evaluator := func(err error) bool {
+		return err.Error() != "ok-error"
+	}
+
+	// Error that evaluator says is NOT a failure
+	_, _ = Execute(client, context.Background(), "test-breaker", func() (string, error) {
+		return "", errors.New("ok-error")
+	}, WithErrorEvaluator(evaluator))
+
+	select {
+	case entry := <-client.reportChan:
+		if !entry.OK {
+			t.Error("expected evaluator to mark 'ok-error' as OK")
+		}
+	default:
+		t.Error("expected a report entry")
+	}
+
+	// Error that evaluator says IS a failure
+	_, _ = Execute(client, context.Background(), "test-breaker", func() (string, error) {
+		return "", errors.New("bad-error")
+	}, WithErrorEvaluator(evaluator))
+
+	select {
+	case entry := <-client.reportChan:
+		if entry.OK {
+			t.Error("expected evaluator to mark 'bad-error' as failure")
+		}
+	default:
+		t.Error("expected a report entry")
+	}
+}
+
+func TestExecute_WithTags(t *testing.T) {
+	client, cleanup := newTestClient(t, WithGlobalTags(map[string]string{"env": "test", "service": "api"}))
+	defer cleanup()
+
+	_, _ = Execute(client, context.Background(), "test-breaker", func() (string, error) {
+		return "ok", nil
+	}, WithTags(map[string]string{"endpoint": "/users", "env": "override"}))
+
+	select {
+	case entry := <-client.reportChan:
+		if entry.Tags["endpoint"] != "/users" {
+			t.Errorf("expected dynamic tag 'endpoint' to be '/users', got %q", entry.Tags["endpoint"])
+		}
+		if entry.Tags["service"] != "api" {
+			t.Errorf("expected global tag 'service' to be 'api', got %q", entry.Tags["service"])
+		}
+		if entry.Tags["env"] != "override" {
+			t.Errorf("expected dynamic tag to override global, got %q", entry.Tags["env"])
+		}
+	default:
+		t.Error("expected a report entry")
+	}
+}
+
+func TestExecute_WithTraceID(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	_, _ = Execute(client, context.Background(), "test-breaker", func() (string, error) {
+		return "ok", nil
+	}, WithTraceID("explicit-trace-123"))
+
+	select {
+	case entry := <-client.reportChan:
+		if entry.TraceID != "explicit-trace-123" {
+			t.Errorf("expected traceID 'explicit-trace-123', got %q", entry.TraceID)
+		}
+	default:
+		t.Error("expected a report entry")
+	}
+}
+
+func TestExecute_TraceIDFromExtractor(t *testing.T) {
+	extractor := func(ctx context.Context) string {
+		return "extracted-trace-456"
+	}
+	client, cleanup := newTestClient(t, WithTraceIDExtractor(extractor))
+	defer cleanup()
+
+	_, _ = Execute(client, context.Background(), "test-breaker", func() (string, error) {
+		return "ok", nil
+	})
+
+	select {
+	case entry := <-client.reportChan:
+		if entry.TraceID != "extracted-trace-456" {
+			t.Errorf("expected traceID 'extracted-trace-456', got %q", entry.TraceID)
+		}
+	default:
+		t.Error("expected a report entry")
+	}
+}
+
+func TestExecute_TraceIDOptionOverridesExtractor(t *testing.T) {
+	extractor := func(ctx context.Context) string {
+		return "extractor-trace"
+	}
+	client, cleanup := newTestClient(t, WithTraceIDExtractor(extractor))
+	defer cleanup()
+
+	_, _ = Execute(client, context.Background(), "test-breaker", func() (string, error) {
+		return "ok", nil
+	}, WithTraceID("option-trace"))
+
+	select {
+	case entry := <-client.reportChan:
+		if entry.TraceID != "option-trace" {
+			t.Errorf("expected option traceID to override extractor, got %q", entry.TraceID)
+		}
+	default:
+		t.Error("expected a report entry")
+	}
+}
+
+func TestMergeTags(t *testing.T) {
+	client, cleanup := newTestClient(t, WithGlobalTags(map[string]string{"a": "1", "b": "2"}))
+	defer cleanup()
+
+	// No dynamic tags - should return globalTags directly
+	result := client.mergeTags(nil)
+	if result["a"] != "1" || result["b"] != "2" {
+		t.Error("expected globalTags to be returned when no dynamic tags")
+	}
+
+	// Only dynamic tags (client without global tags)
+	client2, cleanup2 := newTestClient(t)
+	defer cleanup2()
+
+	dynamic := map[string]string{"x": "10"}
+	result2 := client2.mergeTags(dynamic)
+	if result2["x"] != "10" {
+		t.Error("expected dynamic tags to be returned when no global tags")
+	}
+
+	// Both - dynamic overrides
+	result3 := client.mergeTags(map[string]string{"a": "override", "c": "3"})
+	if result3["a"] != "override" {
+		t.Errorf("expected dynamic to override global, got %q", result3["a"])
+	}
+	if result3["b"] != "2" {
+		t.Errorf("expected global tag b to remain, got %q", result3["b"])
+	}
+	if result3["c"] != "3" {
+		t.Errorf("expected new dynamic tag c, got %q", result3["c"])
+	}
+}
+
+func TestIsFailure(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	errTest := errors.New("test error")
+	errIgnored := errors.New("ignored error")
+
+	tests := []struct {
+		name     string
+		err      error
+		cfg      executeConfig
+		expected bool
+	}{
+		{"nil error", nil, executeConfig{}, false},
+		{"any error", errTest, executeConfig{}, true},
+		{"ignored error", errIgnored, executeConfig{ignoreErrors: []error{errIgnored}}, false},
+		{"non-ignored error", errTest, executeConfig{ignoreErrors: []error{errIgnored}}, true},
+		{"evaluator returns true", errTest, executeConfig{errorEvaluator: func(e error) bool { return true }}, true},
+		{"evaluator returns false", errTest, executeConfig{errorEvaluator: func(e error) bool { return false }}, false},
+		{"evaluator overrides ignore list", errIgnored, executeConfig{
+			ignoreErrors:   []error{errIgnored},
+			errorEvaluator: func(e error) bool { return true }, // evaluator says it's a failure
+		}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := client.isFailure(tt.err, tt.cfg)
+			if result != tt.expected {
+				t.Errorf("isFailure() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsAllowed(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Unknown breaker - fail-open
+	if !client.isAllowed("unknown") {
+		t.Error("expected fail-open for unknown breaker")
+	}
+
+	// Closed breaker
+	client.breakerStatesMu.Lock()
+	client.breakerStates["closed-breaker"] = breakerState{State: "closed", AllowRate: 0}
+	client.breakerStatesMu.Unlock()
+
+	if !client.isAllowed("closed-breaker") {
+		t.Error("expected closed breaker to allow")
+	}
+
+	// Open breaker
+	client.breakerStatesMu.Lock()
+	client.breakerStates["open-breaker"] = breakerState{State: "open", AllowRate: 0}
+	client.breakerStatesMu.Unlock()
+
+	if client.isAllowed("open-breaker") {
+		t.Error("expected open breaker to deny")
+	}
+
+	// Unknown state - fail-open
+	client.breakerStatesMu.Lock()
+	client.breakerStates["unknown-state"] = breakerState{State: "weird", AllowRate: 0}
+	client.breakerStatesMu.Unlock()
+
+	if !client.isAllowed("unknown-state") {
+		t.Error("expected fail-open for unknown state")
 	}
 }
