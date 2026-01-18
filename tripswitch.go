@@ -2,11 +2,20 @@ package tripswitch
 
 import (
 	"context"
+	"encoding/json" // Added for JSON unmarshalling
 	"errors"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/r3labs/sse/v2"
 )
+
+// breakerState holds the current state of a circuit breaker.
+type breakerState struct {
+	State     string  // "open", "closed", "half_open"
+	AllowRate float64 // 0.0 to 1.0
+}
 
 // Client is the main tripswitch client.
 type Client struct {
@@ -36,6 +45,13 @@ type Client struct {
 		sseReconnects       uint64
 		lastSuccessfulFlush time.Time
 	}
+
+	// for SSE state sync
+	breakerStates     map[string]breakerState
+	breakerStatesMu   sync.RWMutex
+	sseReady          chan struct{} // Closed when initial SSE sync is complete
+	sseClient         *sse.Client
+	sseEventURL       string
 }
 
 // Option is a functional option for configuring the client.
@@ -49,6 +65,8 @@ func NewClient(projectID string, opts ...Option) *Client {
 		failOpen:  true,
 		baseURL:   "https://api.tripswitch.dev",
 		logger:    slog.Default(),
+		breakerStates: make(map[string]breakerState),
+		sseReady:      make(chan struct{}),
 	}
 
 	for _, opt := range opts {
@@ -56,6 +74,9 @@ func NewClient(projectID string, opts ...Option) *Client {
 	}
 
 	c.ctx, c.cancel = context.WithCancel(context.Background())
+	c.sseEventURL = c.baseURL + "/v1/projects/" + c.projectID + "/breakers/state:stream"
+
+	go c.startSSEListener()
 
 	return c
 }
@@ -189,4 +210,98 @@ func (c *Client) Close() error {
 		}
 	})
 	return err
+}
+
+// sseBreakerEvent represents the JSON payload of an SSE event for a breaker state change.
+type sseBreakerEvent struct {
+	Breaker   string  `json:"breaker"`
+	State     string  `json:"state"`
+	AllowRate float64 `json:"allow_rate"`
+}
+
+// startSSEListener connects to the SSE endpoint, listens for breaker state changes,
+// and updates the local cache. It handles reconnections and ensures graceful shutdown.
+func (c *Client) startSSEListener() {
+	c.wg.Add(1)
+	defer c.wg.Done()
+
+	c.sseClient = sse.NewClient(c.sseEventURL)
+
+	// Set up Authorization header
+	if c.apiKey != "" {
+		c.sseClient.Headers["Authorization"] = "Bearer " + c.apiKey
+	}
+
+	// The sse client library handles reconnects automatically when SubscribeWithContext is called.
+
+	// Handler for SSE events
+	handler := func(msg *sse.Event) {
+		var event sseBreakerEvent
+		if err := json.Unmarshal(msg.Data, &event); err != nil {
+			c.logger.Error("failed to unmarshal SSE event", "error", err, "data", string(msg.Data))
+			return
+		}
+		c.updateBreakerState(event.Breaker, event.State, event.AllowRate)
+
+		// Mark SSE as connected
+		c.stats.mu.Lock()
+		c.stats.sseConnected = true
+		c.stats.mu.Unlock()
+
+		// Signal that initial sync is complete
+		// This needs to be done carefully to avoid closing a closed channel
+		select {
+		case <-c.sseReady:
+			// Already closed
+		default:
+			close(c.sseReady)
+		}
+	}
+
+	// This blocks until c.ctx is cancelled or connection fails permanently after retries
+	c.logger.Debug("Attempting to subscribe to SSE stream", "url", c.sseEventURL)
+	err := c.sseClient.SubscribeWithContext(c.ctx, "messages", handler)
+	if err != nil && err != context.Canceled { // Ignore context cancellation error
+		c.logger.Error("SSE client subscription ended with error", "error", err)
+
+		// Increment reconnects if the subscription failed unexpectedly
+		c.stats.mu.Lock()
+		c.stats.sseReconnects++
+		c.stats.sseConnected = false // Indicate connection lost
+		c.stats.mu.Unlock()
+	}
+
+	c.logger.Debug("SSE listener shutting down.")
+}
+
+func (c *Client) updateBreakerState(name, newState string, allowRate float64) {
+	c.breakerStatesMu.Lock()
+	defer c.breakerStatesMu.Unlock()
+
+	oldState := ""
+	if existing, ok := c.breakerStates[name]; ok {
+		oldState = existing.State
+	}
+
+	c.breakerStates[name] = breakerState{
+		State:     newState,
+		AllowRate: allowRate,
+	}
+
+	c.logger.Info("Breaker state updated", "name", name, "oldState", oldState, "newState", newState, "allowRate", allowRate)
+
+	// Invoke callback if state changed and it's set
+	if oldState != "" && oldState != newState && c.onStateChange != nil {
+		c.onStateChange(name, oldState, newState)
+	}
+}
+
+// Ready blocks until the initial SSE handshake completes and state is synced.
+func (c *Client) Ready(ctx context.Context) error {
+	select {
+	case <-c.sseReady:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

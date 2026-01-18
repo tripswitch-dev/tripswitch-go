@@ -3,19 +3,29 @@ package tripswitch
 import (
 	"context"
 	"errors"
-	"fmt" // Added for fmt.Errorf
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic" // Needed for atomic operations in mockLogger and potentially for tests
 	"testing"
+	"time"
 )
 
 // mockLogger is a simple logger for testing.
 type mockLogger struct {
-	lastMsg string
+	lastMsg atomic.Value // Use atomic.Value for concurrent-safe updates
 }
 
-func (m *mockLogger) Debug(msg string, args ...any) { m.lastMsg = msg }
-func (m *mockLogger) Info(msg string, args ...any)  { m.lastMsg = msg }
-func (m *mockLogger) Warn(msg string, args ...any)  { m.lastMsg = msg }
-func (m *mockLogger) Error(msg string, args ...any) { m.lastMsg = msg }
+func (m *mockLogger) Debug(msg string, args ...any) { m.lastMsg.Store(msg) }
+func (m *mockLogger) Info(msg string, args ...any)  { m.lastMsg.Store(msg) }
+func (m *mockLogger) Warn(msg string, args ...any)  { m.lastMsg.Store(msg) }
+func (m *mockLogger) Error(msg string, args ...any) { m.lastMsg.Store(msg) }
+func (m *mockLogger) LastMsg() string {
+	if v := m.lastMsg.Load(); v != nil {
+		return v.(string)
+	}
+	return ""
+}
 
 func TestNewClient(t *testing.T) {
 	projectID := "proj_123"
@@ -119,5 +129,56 @@ func TestIsBreakerError(t *testing.T) {
 	wrappedErr := fmt.Errorf("outer error: %w", ErrOpen) // Correct way to wrap
 	if !IsBreakerError(wrappedErr) {
 		t.Errorf("expected IsBreakerError to detect wrapped ErrOpen")
+	}
+}
+
+func TestReady(t *testing.T) {
+	// Start a mock SSE server
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		// Send initial event
+		fmt.Fprintf(w, "data: {\"breaker\": \"test-breaker\", \"state\": \"closed\", \"allow_rate\": 1.0}\n\n")
+		flusher.Flush()
+
+		// Keep connection alive for a short period, then close
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+			// Simulate server closing connection
+			return
+		}
+	}))
+	defer ts.Close()
+
+	client := NewClient("proj_test", WithBaseURL(ts.URL))
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	// Ready should block until the initial event is received
+	err := client.Ready(ctx)
+	if err != nil {
+		t.Fatalf("Ready() failed: %v", err)
+	}
+
+	// Verify the state was updated
+	client.breakerStatesMu.RLock()
+	state, ok := client.breakerStates["test-breaker"]
+	client.breakerStatesMu.RUnlock()
+
+	if !ok || state.State != "closed" || state.AllowRate != 1.0 {
+		t.Errorf("expected test-breaker state to be closed with allow_rate 1.0, got %+v", state)
 	}
 }
