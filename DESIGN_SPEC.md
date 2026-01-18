@@ -11,7 +11,7 @@ Project-scoped. One client per project, goroutine-safe.
 ### Functional Options Pattern
 
 ```go
-ts := tripswitch.New("proj_abc123",
+ts := tripswitch.NewClient("proj_abc123",
     tripswitch.WithAPIKey("sk_..."),
     tripswitch.WithIngestKey("ik_..."),
     tripswitch.WithFailOpen(true),                    // default: true
@@ -20,20 +20,30 @@ ts := tripswitch.New("proj_abc123",
     tripswitch.WithOnStateChange(func(name, from, to string) {
         // callback on breaker state changes
     }),
+    tripswitch.WithTraceIDExtractor(func(ctx context.Context) string {
+        // Pull TraceID from context (e.g., OpenTelemetry)
+        return trace.SpanFromContext(ctx).SpanContext().TraceID().String()
+    }),
+    tripswitch.WithGlobalTags(map[string]string{
+        "service": "checkout-svc",
+        "env":     "production",
+    }),
 )
 defer ts.Close()
 ```
 
 ### Options
 
-| Option              | Description                                      | Default                          |
-|---------------------|--------------------------------------------------|----------------------------------|
-| `WithAPIKey`        | Authenticates SSE connection for reading state   | Required                         |
-| `WithIngestKey`     | Authenticates sample ingestion (Report flush)    | Required                         |
-| `WithFailOpen`      | Allow traffic when Tripswitch unreachable        | `true`                           |
-| `WithBaseURL`       | Override API endpoint                            | `https://api.tripswitch.dev`     |
-| `WithLogger`        | Custom logger (interface-based)                  | `slog.Default()`                 |
-| `WithOnStateChange` | Callback on breaker state transitions            | `nil`                            |
+| Option                 | Description                                      | Default                          |
+|------------------------|--------------------------------------------------|----------------------------------|
+| `WithAPIKey`           | Authenticates SSE connection for reading state   | Required                         |
+| `WithIngestKey`        | Authenticates sample ingestion (Report flush)    | Required                         |
+| `WithFailOpen`         | Allow traffic when Tripswitch unreachable        | `true`                           |
+| `WithBaseURL`          | Override API endpoint                            | `https://api.tripswitch.dev`     |
+| `WithLogger`           | Custom logger (interface-based)                  | `slog.Default()`                 |
+| `WithOnStateChange`    | Callback on breaker state transitions            | `nil`                            |
+| `WithTraceIDExtractor` | Extracts TraceID from context for each sample    | `nil`                            |
+| `WithGlobalTags`       | Tags applied to all samples (e.g., service name) | `nil`                            |
 
 ## Interface
 
@@ -42,7 +52,7 @@ type Client struct {
     // unexported fields
 }
 
-func New(projectID string, opts ...Option) *Client
+func NewClient(projectID string, opts ...Option) *Client
 
 func (c *Client) Ready(ctx context.Context) error
 
@@ -112,7 +122,7 @@ Blocks until SSE handshake completes and initial state is synced.
 
 ### Why This Matters
 
-On `New()`, the client has an empty cache. If `Execute()` is called before SSE syncs, it will fail-open (allow traffic) because no state exists yet. `Ready()` ensures the app doesn't take traffic until breaker state is known.
+On `NewClient()`, the client has an empty cache. If `Execute()` is called before SSE syncs, it will fail-open (allow traffic) because no state exists yet. `Ready()` ensures the app doesn't take traffic until breaker state is known.
 
 ### Signature
 
@@ -136,7 +146,7 @@ func (c *Client) Ready(ctx context.Context) error {
 ### Usage
 
 ```go
-ts := tripswitch.New("proj_abc123", ...)
+ts := tripswitch.NewClient("proj_abc123", ...)
 defer ts.Close()
 
 // Wait for state sync before taking traffic
@@ -182,7 +192,23 @@ tripswitch.WithErrorEvaluator(func(err error) bool {
     // return true if this error should count as a failure
     return !errors.Is(err, sql.ErrNoRows)
 })
+
+// Diagnostic tags (for debugging trips)
+tripswitch.WithTags(map[string]string{
+    "tier":     "premium",
+    "endpoint": "/api/checkout",
+})
+
+// Override TraceID (takes precedence over WithTraceIDExtractor)
+tripswitch.WithTraceID("abc123")
 ```
+
+### TraceID Resolution
+
+TraceID is resolved in the following order:
+1. `WithTraceID` option on `Execute` call (if provided)
+2. `WithTraceIDExtractor` callback on client (if configured)
+3. Empty string (if neither is set)
 
 ### Behavior
 
@@ -274,7 +300,7 @@ func (c *Client) Close() error {
 ### Usage
 
 ```go
-ts := tripswitch.New("proj_abc123", ...)
+ts := tripswitch.NewClient("proj_abc123", ...)
 defer ts.Close()
 ```
 
@@ -287,23 +313,10 @@ Internal sample reporting, called by `Execute`. Fire-and-forget.
 ### Signature
 
 ```go
-func (c *Client) report(name string, ok bool, value float64, opts *ReportOptions)
-
-type ReportOptions struct {
-    TraceID   string
-    Tags      map[string]string
-    Timestamp time.Time          // defaults to now if zero
-}
+func (c *Client) report(entry reportEntry)
 ```
 
-### Parameters
-
-| Param   | Type            | Description                                      |
-|---------|-----------------|--------------------------------------------------|
-| `name`  | `string`        | Breaker name (unique within project)             |
-| `ok`    | `bool`          | Success (true) or failure (false)                |
-| `value` | `float64`       | Metric value (default 1.0 for ok/fail breakers)  |
-| `opts`  | `*ReportOptions`| Optional: traceID, tags, timestamp               |
+The `reportEntry` struct (see Buffer Implementation) includes all fields: `Name`, `OK`, `Value`, `TraceID`, `Tags`, `Timestamp`.
 
 ### Behavior
 
@@ -328,12 +341,16 @@ type reportEntry struct {
     Name      string
     OK        bool
     Value     float64
+    TraceID   string            // from context extractor or WithTraceID option
+    Tags      map[string]string // diagnostic metadata from WithTags option
     Timestamp time.Time
 }
 
 type Client struct {
-    reportChan chan reportEntry
-    stats      struct {
+    reportChan     chan reportEntry
+    traceExtractor func(context.Context) string // set via WithTraceIDExtractor
+    globalTags     map[string]string            // set via WithGlobalTags (read-only after init)
+    stats          struct {
         DroppedSamples uint64
     }
 }
@@ -510,31 +527,87 @@ func (c *Client) isAllowed(name string) bool {
 
 ```go
 func (c *Client) Execute[T any](ctx context.Context, name string, task func() (T, error), opts ...ExecuteOption) (T, error) {
-    // Check context first
+    // 1. Context check (standard Go behavior)
     if err := ctx.Err(); err != nil {
         return *new(T), err
     }
 
-    // Check breaker state
+    // 2. Local State Check (from SSE cache)
     if !c.isAllowed(name) {
         return *new(T), ErrOpen
     }
 
-    // Execute task
+    // 3. Collect Options (tags, overrides)
+    cfg := executeConfig{}
+    for _, opt := range opts {
+        opt(&cfg)
+    }
+
+    // 4. Run Task
+    startTime := time.Now()
     result, err := task()
 
-    // Report (respecting error evaluator)
-    ok := !c.isFailure(err, opts)
+    // 5. Determine Failure (respecting custom evaluators)
+    ok := !c.isFailure(err, cfg)
+
+    // 6. Resolve First-Class TraceID
+    traceID := cfg.traceID
+    if traceID == "" && c.traceExtractor != nil {
+        traceID = c.traceExtractor(ctx)
+    }
+
+    // 7. Fire-and-Forget Report
     c.report(reportEntry{
         Name:      name,
         OK:        ok,
         Value:     1.0,
-        Timestamp: time.Now(),
+        TraceID:   traceID,
+        Tags:      c.mergeTags(cfg.tags),
+        Timestamp: startTime,
     })
 
     return result, err
 }
 ```
+
+**Why this is correct:**
+
+- **TraceID Resolution:** Checks call-specific option first, then falls back to Client's context extractor
+- **Performance:** Captures `startTime` immediately for accurate timestamps
+- **Separation of Concerns:** `isFailure` handles error logic, `isAllowed` handles SSE/throttling, `report` handles async batching
+- **Generics:** Uses `*new(T)` to return zero-value of generic type on error
+
+### Tag Merging (High-Performance)
+
+```go
+func (c *Client) mergeTags(dynamic map[string]string) map[string]string {
+    // Optimization: If no dynamic tags, use global tags directly
+    if len(dynamic) == 0 {
+        return c.globalTags
+    }
+
+    // Optimization: If no global tags, use dynamic tags directly
+    if len(c.globalTags) == 0 {
+        return dynamic
+    }
+
+    // Only allocate a new map if we truly have to merge two sources
+    merged := make(map[string]string, len(c.globalTags)+len(dynamic))
+    for k, v := range c.globalTags {
+        merged[k] = v
+    }
+    for k, v := range dynamic {
+        merged[k] = v // dynamic wins on conflict
+    }
+    return merged
+}
+```
+
+**Why this matters:**
+
+- **Allocation Avoidance:** Only allocates if both global and dynamic tags exist (critical for high-throughput)
+- **Pre-sized Map:** Uses `make(map, size)` to prevent re-growth/re-hashing
+- **Thread Safety:** `c.globalTags` is read-only after init, no mutex needed
 
 ### Error Evaluation (isFailure)
 
@@ -543,24 +616,26 @@ Determines whether an error should count as a failure for breaker purposes.
 **Important**: `WithErrorEvaluator` takes precedence over `WithIgnoreErrors`. If both are provided, only the evaluator is used. This allows users to handle complex cases like ignoring entire classes of errors (e.g., all 4xx HTTP codes).
 
 ```go
-type executeOptions struct {
+type executeConfig struct {
     ignoreErrors   []error
     errorEvaluator func(error) bool
+    traceID        string
+    tags           map[string]string
 }
 
-func (c *Client) isFailure(err error, opts executeOptions) bool {
+func (c *Client) isFailure(err error, cfg executeConfig) bool {
     // No error = not a failure
     if err == nil {
         return false
     }
 
     // Custom evaluator takes precedence (overrides ignore list)
-    if opts.errorEvaluator != nil {
-        return opts.errorEvaluator(err)
+    if cfg.errorEvaluator != nil {
+        return cfg.errorEvaluator(err)
     }
 
     // Check ignore list
-    for _, ignored := range opts.ignoreErrors {
+    for _, ignored := range cfg.ignoreErrors {
         if errors.Is(err, ignored) {
             return false
         }
@@ -618,6 +693,26 @@ type Logger interface {
    - Graceful shutdown in `main.go` using `os.Signal`
 3. Implement SSE endpoint on server side
 4. Add breaker name index to database (`project_id`, `name`)
+
+---
+
+## Implementation Invariants
+
+These invariants MUST hold in the implementation:
+
+### TraceID Resolution
+- `Execute` MUST resolve `TraceID` from `Context` using the configured `traceExtractor` if not explicitly provided via `WithTraceID`
+- Priority: `WithTraceID` option > `WithTraceIDExtractor` callback > empty string
+
+### Tag Merging
+- `Tags` from `WithTags` (call-site) MUST be merged with `globalTags` (client-level) before the sample is queued
+- On key conflict, **dynamic tags win** (call-site overrides global)
+- `globalTags` is read-only after client initialization
+
+### Performance Properties
+- `globalTags` is stored on the `Client` struct as `map[string]string`
+- Dynamic tags are stored in the `executeConfig` struct
+- `mergeTags` MUST avoid allocation when only one tag source exists
 
 ---
 
