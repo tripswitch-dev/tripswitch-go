@@ -52,8 +52,6 @@ type Client struct {
 	sseReady          chan struct{} // Closed when initial SSE sync is complete
 	sseClient         *sse.Client
 	sseEventURL       string
-
-
 }
 
 // Option is a functional option for configuring the client.
@@ -266,6 +264,12 @@ func (c *Client) startSSEListener() {
 	if err != nil && err != context.Canceled { // Ignore context cancellation error
 		c.logger.Error("SSE client subscription ended with error", "error", err)
 
+		// Increment reconnects if the subscription failed unexpectedly
+		c.stats.mu.Lock()
+		c.stats.sseReconnects++
+		c.stats.sseConnected = false // Indicate connection lost
+		c.stats.mu.Unlock()
+
 		// If subscription fails, and failOpen is false, we should indicate connection is down
 		if !c.failOpen {
 			c.stats.mu.Lock()
@@ -298,13 +302,7 @@ func (c *Client) updateBreakerState(name, newState string, allowRate float64) {
 		c.onStateChange(name, oldState, newState)
 	}
 
-	// Signal that initial sync is complete after the first update (or on connect)
-	select {
-	case <-c.sseReady:
-		// Already closed
-	default:
-		close(c.sseReady)
-	}
+
 }
 
 // Ready blocks until the initial SSE handshake completes and state is synced.
