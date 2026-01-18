@@ -269,8 +269,6 @@ func (c *Client) startSSEListener() {
 		c.stats.sseReconnects++
 		c.stats.sseConnected = false // Indicate connection lost
 		c.stats.mu.Unlock()
-
-
 	}
 
 	c.logger.Debug("SSE listener shutting down.")
