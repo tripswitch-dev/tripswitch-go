@@ -270,12 +270,7 @@ func (c *Client) startSSEListener() {
 		c.stats.sseConnected = false // Indicate connection lost
 		c.stats.mu.Unlock()
 
-		// If subscription fails, and failOpen is false, we should indicate connection is down
-		if !c.failOpen {
-			c.stats.mu.Lock()
-			c.stats.sseConnected = false // Indicate connection lost if not fail-open
-			c.stats.mu.Unlock()
-		}
+
 	}
 
 	c.logger.Debug("SSE listener shutting down.")
@@ -301,8 +296,6 @@ func (c *Client) updateBreakerState(name, newState string, allowRate float64) {
 	if oldState != "" && oldState != newState && c.onStateChange != nil {
 		c.onStateChange(name, oldState, newState)
 	}
-
-
 }
 
 // Ready blocks until the initial SSE handshake completes and state is synced.
