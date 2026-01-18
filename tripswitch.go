@@ -1,3 +1,50 @@
+// Package tripswitch provides the official Go client SDK for Tripswitch,
+// a circuit breaker management service.
+//
+// The client maintains real-time circuit breaker state via Server-Sent Events (SSE)
+// and automatically reports execution samples to the Tripswitch API. It is goroutine-safe
+// and designed for high-throughput applications.
+//
+// # Quick Start
+//
+//	ts := tripswitch.NewClient("proj_abc123",
+//	    tripswitch.WithAPIKey("sk_..."),
+//	    tripswitch.WithIngestKey("ik_..."),
+//	)
+//	defer ts.Close(context.Background())
+//
+//	// Wait for state sync before taking traffic
+//	if err := ts.Ready(ctx); err != nil {
+//	    log.Fatal(err)
+//	}
+//
+//	// Wrap operations with circuit breaker
+//	resp, err := tripswitch.Execute(ts, ctx, "external-api", func() (*http.Response, error) {
+//	    return client.Do(req)
+//	})
+//
+// # Circuit Breaker States
+//
+// The SDK handles three breaker states:
+//   - closed: All requests allowed, results reported
+//   - open: All requests rejected with [ErrOpen]
+//   - half_open: Requests throttled based on allow_rate (probabilistic)
+//
+// # Error Handling
+//
+// Use [IsBreakerError] to check if an error is circuit breaker related:
+//
+//	if tripswitch.IsBreakerError(err) {
+//	    // Return cached/fallback response
+//	}
+//
+// # Graceful Shutdown
+//
+// Always call [Client.Close] to flush buffered samples:
+//
+//	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer cancel()
+//	ts.Close(ctx)
 package tripswitch
 
 import (
