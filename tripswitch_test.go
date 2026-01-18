@@ -126,6 +126,13 @@ func TestClose(t *testing.T) {
 	defer server.Close()
 
 	ts := NewClient("proj_abc", WithBaseURL(server.URL))
+
+	// Wait for SSE connection to be established before closing
+	// This avoids race condition where Close() is called while SSE is still connecting
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = ts.Ready(ctx) // Ignore error - just ensuring connection attempt completes
+
 	err := ts.Close()
 	if err != nil {
 		t.Fatalf("Close() returned an error: %v", err)
