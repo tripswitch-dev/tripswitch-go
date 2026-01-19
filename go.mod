@@ -1,4 +1,4 @@
-module tripswitch-go
+module github.com/tripswitch-dev/tripswitch-go
 
 go 1.22
 
