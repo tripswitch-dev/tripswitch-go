@@ -51,6 +51,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -348,6 +349,14 @@ func (c *Client) startSSEListener() {
 
 	c.sseClient = sse.NewClient(c.sseEventURL)
 
+	// Force HTTP/1.1 for SSE - HTTP/2 has issues with streaming in some configurations
+	c.sseClient.Connection = &http.Client{
+		Transport: &http.Transport{
+			ForceAttemptHTTP2: false,
+			TLSNextProto:      make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
+		},
+	}
+
 	// Set up Authorization header
 	if c.apiKey != "" {
 		c.sseClient.Headers["Authorization"] = "Bearer " + c.apiKey
@@ -380,8 +389,9 @@ func (c *Client) startSSEListener() {
 	}
 
 	// This blocks until c.ctx is cancelled or connection fails permanently after retries
+	// Note: empty string avoids query param and receives all events without filtering
 	c.logger.Debug("Attempting to subscribe to SSE stream", "url", c.sseEventURL)
-	err := c.sseClient.SubscribeWithContext(c.ctx, "messages", handler)
+	err := c.sseClient.SubscribeWithContext(c.ctx, "", handler)
 	if err != nil && err != context.Canceled { // Ignore context cancellation error
 		c.logger.Error("SSE client subscription ended with error", "error", err)
 
