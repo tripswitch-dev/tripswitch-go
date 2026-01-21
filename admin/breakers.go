@@ -30,19 +30,27 @@ func (c *Client) ListBreakers(ctx context.Context, projectID string, params List
 	return &result, nil
 }
 
+// breakerResponse wraps single breaker responses from the API.
+type breakerResponse struct {
+	Breaker  Breaker `json:"breaker"`
+	RouterID string  `json:"router_id,omitempty"`
+}
+
 // CreateBreaker creates a new breaker.
 func (c *Client) CreateBreaker(ctx context.Context, projectID string, input CreateBreakerInput, opts ...RequestOption) (*Breaker, error) {
-	var breaker Breaker
+	var resp breakerResponse
 	err := c.do(ctx, request{
 		method:  http.MethodPost,
 		path:    "/v1/projects/" + projectID + "/breakers",
 		body:    input,
 		options: opts,
-	}, &breaker)
+	}, &resp)
 	if err != nil {
 		return nil, err
 	}
-	return &breaker, nil
+	// Copy router_id from wrapper to breaker
+	resp.Breaker.RouterID = resp.RouterID
+	return &resp.Breaker, nil
 }
 
 // SyncBreakers replaces all breakers for a project (bulk sync).
@@ -62,31 +70,35 @@ func (c *Client) SyncBreakers(ctx context.Context, projectID string, input SyncB
 
 // GetBreaker retrieves a specific breaker.
 func (c *Client) GetBreaker(ctx context.Context, projectID, breakerID string, opts ...RequestOption) (*Breaker, error) {
-	var breaker Breaker
+	var resp breakerResponse
 	err := c.do(ctx, request{
 		method:  http.MethodGet,
 		path:    "/v1/projects/" + projectID + "/breakers/" + breakerID,
 		options: opts,
-	}, &breaker)
+	}, &resp)
 	if err != nil {
 		return nil, err
 	}
-	return &breaker, nil
+	// Copy router_id from wrapper to breaker
+	resp.Breaker.RouterID = resp.RouterID
+	return &resp.Breaker, nil
 }
 
 // UpdateBreaker updates a breaker's configuration.
 func (c *Client) UpdateBreaker(ctx context.Context, projectID, breakerID string, input UpdateBreakerInput, opts ...RequestOption) (*Breaker, error) {
-	var breaker Breaker
+	var resp breakerResponse
 	err := c.do(ctx, request{
 		method:  http.MethodPatch,
 		path:    "/v1/projects/" + projectID + "/breakers/" + breakerID,
 		body:    input,
 		options: opts,
-	}, &breaker)
+	}, &resp)
 	if err != nil {
 		return nil, err
 	}
-	return &breaker, nil
+	// Copy router_id from wrapper to breaker
+	resp.Breaker.RouterID = resp.RouterID
+	return &resp.Breaker, nil
 }
 
 // DeleteBreaker removes a breaker.
@@ -185,10 +197,10 @@ func (p *BreakerPager) Next() bool {
 		return false
 	}
 
-	p.items = result.Items
+	p.items = result.Breakers
 	p.index = 0
-	p.cursor = result.NextCursor
-	p.done = result.NextCursor == ""
+	// API doesn't support cursor-based pagination currently
+	p.done = true
 
 	return len(p.items) > 0
 }

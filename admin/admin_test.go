@@ -118,11 +118,13 @@ func TestCreateBreaker(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(Breaker{
-			ID:        "breaker_456",
-			ProjectID: "proj_123",
-			Name:      input.Name,
-			Kind:      input.Kind,
+		json.NewEncoder(w).Encode(map[string]any{
+			"breaker": Breaker{
+				ID:   "breaker_456",
+				Name: input.Name,
+				Kind: input.Kind,
+			},
+			"router_id": "router_789",
 		})
 	}))
 	defer server.Close()
@@ -155,11 +157,12 @@ func TestListBreakers(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ListBreakersResponse{
-			Items: []Breaker{
+			Breakers: []Breaker{
 				{ID: "breaker_1", Name: "breaker-one"},
 				{ID: "breaker_2", Name: "breaker-two"},
 			},
-			NextCursor: "cursor_abc",
+			Count: 2,
+			Hash:  "abc123",
 		})
 	}))
 	defer server.Close()
@@ -170,11 +173,11 @@ func TestListBreakers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(result.Items) != 2 {
-		t.Errorf("expected 2 items, got %d", len(result.Items))
+	if len(result.Breakers) != 2 {
+		t.Errorf("expected 2 breakers, got %d", len(result.Breakers))
 	}
-	if result.NextCursor != "cursor_abc" {
-		t.Errorf("expected cursor 'cursor_abc', got %q", result.NextCursor)
+	if result.Count != 2 {
+		t.Errorf("expected count 2, got %d", result.Count)
 	}
 }
 
@@ -480,11 +483,12 @@ func TestListEvents(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(Page[Event]{
-			Items: []Event{
+		json.NewEncoder(w).Encode(ListEventsResponse{
+			Events: []Event{
 				{ID: "event_1", FromState: "closed", ToState: "open"},
 				{ID: "event_2", FromState: "open", ToState: "half_open"},
 			},
+			Returned: 2,
 		})
 	}))
 	defer server.Close()
@@ -497,8 +501,8 @@ func TestListEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(result.Items) != 2 {
-		t.Errorf("expected 2 events, got %d", len(result.Items))
+	if len(result.Events) != 2 {
+		t.Errorf("expected 2 events, got %d", len(result.Events))
 	}
 }
 
@@ -506,10 +510,9 @@ func TestGetStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(Status{
-			ProjectID:      "proj_123",
-			OpenBreakers:   2,
-			ClosedBreakers: 8,
-			TotalBreakers:  10,
+			OpenCount:   2,
+			ClosedCount: 8,
+			LastEvalMs:  1234567890,
 		})
 	}))
 	defer server.Close()
@@ -520,11 +523,11 @@ func TestGetStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if status.TotalBreakers != 10 {
-		t.Errorf("expected 10 total breakers, got %d", status.TotalBreakers)
+	if status.ClosedCount != 8 {
+		t.Errorf("expected 8 closed breakers, got %d", status.ClosedCount)
 	}
-	if status.OpenBreakers != 2 {
-		t.Errorf("expected 2 open breakers, got %d", status.OpenBreakers)
+	if status.OpenCount != 2 {
+		t.Errorf("expected 2 open breakers, got %d", status.OpenCount)
 	}
 }
 
@@ -532,19 +535,10 @@ func TestBreakerPager(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		cursor := r.URL.Query().Get("cursor")
 
-		var resp ListBreakersResponse
-		if cursor == "" {
-			resp = ListBreakersResponse{
-				Items:      []Breaker{{ID: "b1"}, {ID: "b2"}},
-				NextCursor: "page2",
-			}
-		} else if cursor == "page2" {
-			resp = ListBreakersResponse{
-				Items:      []Breaker{{ID: "b3"}},
-				NextCursor: "",
-			}
+		resp := ListBreakersResponse{
+			Breakers: []Breaker{{ID: "b1"}, {ID: "b2"}, {ID: "b3"}},
+			Count:    3,
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -555,7 +549,7 @@ func TestBreakerPager(t *testing.T) {
 	client := NewClient(WithBaseURL(server.URL))
 
 	var ids []string
-	pager := client.ListBreakersPager(context.Background(), "proj_123", ListParams{Limit: 2})
+	pager := client.ListBreakersPager(context.Background(), "proj_123", ListParams{Limit: 10})
 	for pager.Next() {
 		ids = append(ids, pager.Item().ID)
 	}
@@ -566,8 +560,9 @@ func TestBreakerPager(t *testing.T) {
 	if len(ids) != 3 {
 		t.Errorf("expected 3 items, got %d", len(ids))
 	}
-	if callCount != 2 {
-		t.Errorf("expected 2 API calls, got %d", callCount)
+	// API doesn't support pagination, so only 1 call
+	if callCount != 1 {
+		t.Errorf("expected 1 API call, got %d", callCount)
 	}
 }
 

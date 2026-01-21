@@ -8,7 +8,7 @@ import (
 )
 
 // ListEvents retrieves state transition events for a project.
-func (c *Client) ListEvents(ctx context.Context, projectID string, params ListEventsParams, opts ...RequestOption) (*Page[Event], error) {
+func (c *Client) ListEvents(ctx context.Context, projectID string, params ListEventsParams, opts ...RequestOption) (*ListEventsResponse, error) {
 	query := url.Values{}
 	if params.BreakerID != "" {
 		query.Set("breaker_id", params.BreakerID)
@@ -26,7 +26,7 @@ func (c *Client) ListEvents(ctx context.Context, projectID string, params ListEv
 		query.Set("limit", strconv.Itoa(params.Limit))
 	}
 
-	var result Page[Event]
+	var result ListEventsResponse
 	err := c.do(ctx, request{
 		method:  http.MethodGet,
 		path:    "/v1/projects/" + projectID + "/events",
@@ -107,10 +107,14 @@ func (p *EventPager) Next() bool {
 		return false
 	}
 
-	p.items = result.Items
+	p.items = result.Events
 	p.index = 0
-	p.cursor = result.NextCursor
-	p.done = result.NextCursor == ""
+	if result.NextCursor != nil {
+		p.cursor = *result.NextCursor
+		p.done = false
+	} else {
+		p.done = true
+	}
 
 	return len(p.items) > 0
 }

@@ -22,22 +22,20 @@ type ListParams struct {
 
 // Project represents a Tripswitch project.
 type Project struct {
-	ID                 string    `json:"id"`
-	Name               string    `json:"name"`
-	WebhookURL         string    `json:"webhook_url,omitempty"`
-	TraceURLTemplate   string    `json:"trace_url_template,omitempty"`
-	RequireSignedIngest bool     `json:"require_signed_ingest"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                  string `json:"project_id"`
+	Name                string `json:"name"`
+	SlackWebhookURL     string `json:"slack_webhook_url,omitempty"`
+	TraceIDURLTemplate  string `json:"trace_id_url_template,omitempty"`
+	EnableSignedIngest  bool   `json:"enable_signed_ingest"`
 }
 
 // UpdateProjectInput contains fields for updating a project.
 // Use Ptr() to set optional fields.
 type UpdateProjectInput struct {
-	Name                *string `json:"name,omitempty"`
-	WebhookURL          *string `json:"webhook_url,omitempty"`
-	TraceURLTemplate    *string `json:"trace_url_template,omitempty"`
-	RequireSignedIngest *bool   `json:"require_signed_ingest,omitempty"`
+	Name               *string `json:"name,omitempty"`
+	SlackWebhookURL    *string `json:"slack_webhook_url,omitempty"`
+	TraceIDURLTemplate *string `json:"trace_id_url_template,omitempty"`
+	EnableSignedIngest *bool   `json:"enable_signed_ingest,omitempty"`
 }
 
 // IngestSecretRotation represents the result of rotating an ingest secret.
@@ -83,58 +81,50 @@ const (
 
 // Breaker represents a circuit breaker configuration.
 type Breaker struct {
-	ID                          string         `json:"id"`
-	ProjectID                   string         `json:"project_id"`
-	Name                        string         `json:"name"`
-	Description                 string         `json:"description,omitempty"`
-	Metric                      string         `json:"metric"`
-	Kind                        BreakerKind    `json:"kind"`
-	Op                          BreakerOp      `json:"op"`
-	Threshold                   float64        `json:"threshold"`
-	WindowMs                    int            `json:"window_ms,omitempty"`
-	MinCount                    int            `json:"min_count,omitempty"`
-	EvalIntervalMs              int            `json:"eval_interval_ms,omitempty"`
-	CooldownMs                  int            `json:"cooldown_ms,omitempty"`
-	HalfOpenBackoffEnabled      bool           `json:"half_open_backoff_enabled,omitempty"`
-	HalfOpenIndeterminatePolicy HalfOpenPolicy `json:"half_open_indeterminate_policy,omitempty"`
-	Enabled                     bool           `json:"enabled"`
-	CreatedAt                   time.Time      `json:"created_at"`
-	UpdatedAt                   time.Time      `json:"updated_at"`
+	ID                 string            `json:"id"`
+	RouterID           string            `json:"router_id,omitempty"`
+	Name               string            `json:"name"`
+	Metric             string            `json:"metric"`
+	Kind               BreakerKind       `json:"kind"`
+	KindParams         map[string]any    `json:"kind_params,omitempty"`
+	Op                 BreakerOp         `json:"op"`
+	Threshold          float64           `json:"threshold"`
+	WindowMs           int               `json:"window_ms,omitempty"`
+	MinCount           int               `json:"min_count,omitempty"`
+	MinStateDurationMs int               `json:"min_state_duration_ms,omitempty"`
+	CooldownMs         int               `json:"cooldown_ms,omitempty"`
+	Actions            map[string]any    `json:"actions,omitempty"`
 }
 
 // CreateBreakerInput contains fields for creating a breaker.
 type CreateBreakerInput struct {
-	Name                        string         `json:"name"`
-	Description                 string         `json:"description,omitempty"`
-	Metric                      string         `json:"metric"`
-	Kind                        BreakerKind    `json:"kind"`
-	Op                          BreakerOp      `json:"op"`
-	Threshold                   float64        `json:"threshold"`
-	WindowMs                    int            `json:"window_ms,omitempty"`
-	MinCount                    int            `json:"min_count,omitempty"`
-	EvalIntervalMs              int            `json:"eval_interval_ms,omitempty"`
-	CooldownMs                  int            `json:"cooldown_ms,omitempty"`
-	HalfOpenBackoffEnabled      bool           `json:"half_open_backoff_enabled,omitempty"`
-	HalfOpenIndeterminatePolicy HalfOpenPolicy `json:"half_open_indeterminate_policy,omitempty"`
-	Enabled                     bool           `json:"enabled,omitempty"`
+	Name               string         `json:"name"`
+	Metric             string         `json:"metric"`
+	Kind               BreakerKind    `json:"kind"`
+	KindParams         map[string]any `json:"kind_params,omitempty"`
+	Op                 BreakerOp      `json:"op"`
+	Threshold          float64        `json:"threshold"`
+	WindowMs           int            `json:"window_ms,omitempty"`
+	MinCount           int            `json:"min_count,omitempty"`
+	MinStateDurationMs int            `json:"min_state_duration_ms,omitempty"`
+	CooldownMs         int            `json:"cooldown_ms,omitempty"`
+	Actions            map[string]any `json:"actions,omitempty"`
 }
 
 // UpdateBreakerInput contains fields for updating a breaker.
 // Use Ptr() to set optional fields.
 type UpdateBreakerInput struct {
-	Name                        *string         `json:"name,omitempty"`
-	Description                 *string         `json:"description,omitempty"`
-	Metric                      *string         `json:"metric,omitempty"`
-	Kind                        *BreakerKind    `json:"kind,omitempty"`
-	Op                          *BreakerOp      `json:"op,omitempty"`
-	Threshold                   *float64        `json:"threshold,omitempty"`
-	WindowMs                    *int            `json:"window_ms,omitempty"`
-	MinCount                    *int            `json:"min_count,omitempty"`
-	EvalIntervalMs              *int            `json:"eval_interval_ms,omitempty"`
-	CooldownMs                  *int            `json:"cooldown_ms,omitempty"`
-	HalfOpenBackoffEnabled      *bool           `json:"half_open_backoff_enabled,omitempty"`
-	HalfOpenIndeterminatePolicy *HalfOpenPolicy `json:"half_open_indeterminate_policy,omitempty"`
-	Enabled                     *bool           `json:"enabled,omitempty"`
+	Name               *string         `json:"name,omitempty"`
+	Metric             *string         `json:"metric,omitempty"`
+	Kind               *BreakerKind    `json:"kind,omitempty"`
+	KindParams         map[string]any  `json:"kind_params,omitempty"`
+	Op                 *BreakerOp      `json:"op,omitempty"`
+	Threshold          *float64        `json:"threshold,omitempty"`
+	WindowMs           *int            `json:"window_ms,omitempty"`
+	MinCount           *int            `json:"min_count,omitempty"`
+	MinStateDurationMs *int            `json:"min_state_duration_ms,omitempty"`
+	CooldownMs         *int            `json:"cooldown_ms,omitempty"`
+	Actions            map[string]any  `json:"actions,omitempty"`
 }
 
 // SyncBreakersInput contains a list of breakers for bulk sync.
@@ -158,9 +148,10 @@ type BatchGetBreakerStatesInput struct {
 
 // ListBreakersResponse contains the response from listing breakers.
 type ListBreakersResponse struct {
-	Items       []Breaker `json:"items"`
-	NextCursor  string    `json:"next_cursor,omitempty"`
-	ContentHash string    `json:"content_hash,omitempty"`
+	Breakers  []Breaker `json:"breakers"`
+	Count     int       `json:"count"`
+	Hash      string    `json:"hash,omitempty"`
+	UpdatedAt string    `json:"updated_at,omitempty"` // Non-RFC3339 format from API
 }
 
 // RouterMode represents the routing mode.
@@ -175,15 +166,18 @@ const (
 // Router represents a router configuration.
 type Router struct {
 	ID           string     `json:"id"`
-	ProjectID    string     `json:"project_id"`
 	Name         string     `json:"name"`
-	Description  string     `json:"description,omitempty"`
 	Mode         RouterMode `json:"mode"`
 	Enabled      bool       `json:"enabled"`
 	BreakerCount int        `json:"breaker_count,omitempty"`
 	Breakers     []Breaker  `json:"breakers,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	InsertedAt   time.Time  `json:"inserted_at,omitempty"`
+	CreatedBy    string     `json:"created_by,omitempty"`
+}
+
+// ListRoutersResponse contains the response from listing routers.
+type ListRoutersResponse struct {
+	Routers []Router `json:"routers"`
 }
 
 // CreateRouterInput contains fields for creating a router.
@@ -277,12 +271,16 @@ type ListEventsParams struct {
 	Limit     int       `json:"limit,omitempty"`
 }
 
+// ListEventsResponse contains the response from listing events.
+type ListEventsResponse struct {
+	Events     []Event `json:"events"`
+	Returned   int     `json:"returned"`
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
 // Status represents the project status summary.
 type Status struct {
-	ProjectID          string    `json:"project_id"`
-	OpenBreakers       int       `json:"open_breakers"`
-	ClosedBreakers     int       `json:"closed_breakers"`
-	HalfOpenBreakers   int       `json:"half_open_breakers"`
-	TotalBreakers      int       `json:"total_breakers"`
-	LastEvaluationAt   time.Time `json:"last_evaluation_at,omitempty"`
+	OpenCount   int   `json:"open_count"`
+	ClosedCount int   `json:"closed_count"`
+	LastEvalMs  int64 `json:"last_eval_ms,omitempty"`
 }

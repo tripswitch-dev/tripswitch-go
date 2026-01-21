@@ -69,8 +69,8 @@ func TestIntegration_ListBreakers(t *testing.T) {
 		t.Fatalf("ListBreakers failed: %v", err)
 	}
 
-	t.Logf("Found %d breakers", len(result.Items))
-	for _, b := range result.Items {
+	t.Logf("Found %d breakers", len(result.Breakers))
+	for _, b := range result.Breakers {
 		t.Logf("  - %s (%s)", b.Name, b.ID)
 	}
 }
@@ -91,11 +91,9 @@ func TestIntegration_GetStatus(t *testing.T) {
 		t.Fatalf("GetStatus failed: %v", err)
 	}
 
-	t.Logf("Status: %d total breakers (%d open, %d closed, %d half-open)",
-		status.TotalBreakers,
-		status.OpenBreakers,
-		status.ClosedBreakers,
-		status.HalfOpenBreakers,
+	t.Logf("Status: %d open, %d closed",
+		status.OpenCount,
+		status.ClosedCount,
 	)
 }
 
@@ -182,8 +180,8 @@ func TestIntegration_ListRouters(t *testing.T) {
 		t.Fatalf("ListRouters failed: %v", err)
 	}
 
-	t.Logf("Found %d routers", len(result.Items))
-	for _, r := range result.Items {
+	t.Logf("Found %d routers", len(result.Routers))
+	for _, r := range result.Routers {
 		t.Logf("  - %s (%s) mode=%s", r.Name, r.ID, r.Mode)
 	}
 }
@@ -226,8 +224,8 @@ func TestIntegration_ListEvents(t *testing.T) {
 		t.Fatalf("ListEvents failed: %v", err)
 	}
 
-	t.Logf("Found %d events", len(result.Items))
-	for _, e := range result.Items {
+	t.Logf("Found %d events", len(result.Events))
+	for _, e := range result.Events {
 		t.Logf("  - %s: %s -> %s", e.BreakerID, e.FromState, e.ToState)
 	}
 }

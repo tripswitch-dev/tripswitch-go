@@ -8,7 +8,7 @@ import (
 )
 
 // ListRouters retrieves all routers for a project.
-func (c *Client) ListRouters(ctx context.Context, projectID string, params ListParams, opts ...RequestOption) (*Page[Router], error) {
+func (c *Client) ListRouters(ctx context.Context, projectID string, params ListParams, opts ...RequestOption) (*ListRoutersResponse, error) {
 	query := url.Values{}
 	if params.Cursor != "" {
 		query.Set("cursor", params.Cursor)
@@ -17,7 +17,7 @@ func (c *Client) ListRouters(ctx context.Context, projectID string, params ListP
 		query.Set("limit", strconv.Itoa(params.Limit))
 	}
 
-	var result Page[Router]
+	var result ListRoutersResponse
 	err := c.do(ctx, request{
 		method:  http.MethodGet,
 		path:    "/v1/projects/" + projectID + "/routers",
@@ -157,10 +157,10 @@ func (p *RouterPager) Next() bool {
 		return false
 	}
 
-	p.items = result.Items
+	p.items = result.Routers
 	p.index = 0
-	p.cursor = result.NextCursor
-	p.done = result.NextCursor == ""
+	// API doesn't support cursor-based pagination currently
+	p.done = true
 
 	return len(p.items) > 0
 }
