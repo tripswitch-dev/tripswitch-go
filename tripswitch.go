@@ -9,7 +9,7 @@
 //
 //	ts := tripswitch.NewClient("proj_abc123",
 //	    tripswitch.WithAPIKey("sk_..."),
-//	    tripswitch.WithIngestKey("ik_..."),
+//	    tripswitch.WithIngestSecret("..."), // 64-char hex string
 //	)
 //	defer ts.Close(context.Background())
 //
@@ -51,13 +51,17 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -71,28 +75,37 @@ type breakerState struct {
 	AllowRate float64 // 0.0 to 1.0
 }
 
+// Breaker identifies a circuit breaker for use with [Execute].
+// The RouterID and Metric fields are required for sample reporting.
+// The Name field is used for state lookup (must match the breaker name from SSE).
+type Breaker struct {
+	RouterID string // Routing key for samples (from breaker config)
+	Metric   string // Metric name for samples (from breaker config)
+	Name     string // Breaker name for state lookup (matches SSE events)
+}
+
 // reportEntry represents a single sample to be reported.
 type reportEntry struct {
-	Name      string            `json:"name"`
-	OK        bool              `json:"ok"`
-	Value     float64           `json:"value"`
-	TraceID   string            `json:"trace_id,omitempty"`
-	Tags      map[string]string `json:"tags,omitempty"`
-	Timestamp time.Time         `json:"timestamp"`
+	RouterID string            `json:"router_id"`
+	Metric   string            `json:"metric"`
+	TsMs     int64             `json:"ts_ms"`
+	Value    float64           `json:"value"`
+	OK       bool              `json:"ok"`
+	Tags     map[string]string `json:"tags,omitempty"`
+	TraceID  string            `json:"trace_id,omitempty"`
 }
 
 // batchPayload is the wire format for sending samples to the ingest endpoint.
 type batchPayload struct {
-	ProjectID string        `json:"project_id"`
-	Samples   []reportEntry `json:"samples"`
+	Samples []reportEntry `json:"samples"`
 }
 
 // Client is the main tripswitch client.
 type Client struct {
-	projectID      string
-	apiKey         string
-	ingestKey      string
-	failOpen       bool
+	projectID    string
+	apiKey       string
+	ingestSecret string // 64-char hex string for HMAC signing
+	failOpen     bool
 	baseURL        string
 	logger         Logger
 	onStateChange  func(name, from, to string)
@@ -197,11 +210,18 @@ func WithAPIKey(key string) Option {
 	}
 }
 
-// WithIngestKey sets the ingest key for the client.
-func WithIngestKey(key string) Option {
+// WithIngestSecret sets the ingest secret for HMAC-signed sample ingestion.
+// The secret is a 64-character hex string used to sign requests to the metrics endpoint.
+func WithIngestSecret(secret string) Option {
 	return func(c *Client) {
-		c.ingestKey = key
+		c.ingestSecret = secret
 	}
+}
+
+// WithIngestKey is deprecated: use [WithIngestSecret] instead.
+// This function exists for backwards compatibility.
+func WithIngestKey(key string) Option {
+	return WithIngestSecret(key)
 }
 
 // WithFailOpen sets the fail-open behavior of the client.
@@ -440,7 +460,11 @@ func (c *Client) Ready(ctx context.Context) error {
 // Execute wraps a task with circuit breaker logic.
 // It checks the breaker state, runs the task if allowed, and reports the result.
 // This is a package-level generic function because Go does not support generic methods.
-func Execute[T any](c *Client, ctx context.Context, name string, task func() (T, error), opts ...ExecuteOption) (T, error) {
+//
+// The Breaker parameter must include RouterID, Metric, and Name fields:
+//   - Name is used for state lookup (must match breaker name from SSE)
+//   - RouterID and Metric are used for sample reporting
+func Execute[T any](c *Client, ctx context.Context, b Breaker, task func() (T, error), opts ...ExecuteOption) (T, error) {
 	var zero T
 
 	// Check context first
@@ -448,8 +472,8 @@ func Execute[T any](c *Client, ctx context.Context, name string, task func() (T,
 		return zero, err
 	}
 
-	// Check breaker state
-	if !c.isAllowed(name) {
+	// Check breaker state using the breaker name
+	if !c.isAllowed(b.Name) {
 		return zero, ErrOpen
 	}
 
@@ -472,14 +496,15 @@ func Execute[T any](c *Client, ctx context.Context, name string, task func() (T,
 		traceID = c.traceExtractor(ctx)
 	}
 
-	// Fire-and-forget report
+	// Fire-and-forget report using router_id and metric
 	c.report(reportEntry{
-		Name:      name,
-		OK:        ok,
-		Value:     1.0,
-		TraceID:   traceID,
-		Tags:      c.mergeTags(cfg.tags),
-		Timestamp: startTime,
+		RouterID: b.RouterID,
+		Metric:   b.Metric,
+		TsMs:     startTime.UnixMilli(),
+		Value:    1.0,
+		OK:       ok,
+		TraceID:  traceID,
+		Tags:     c.mergeTags(cfg.tags),
 	})
 
 	return result, err
@@ -609,20 +634,19 @@ func (c *Client) startFlusher() {
 	}
 }
 
-// sendBatch sends a batch of samples to the ingest endpoint.
+// sendBatch sends a batch of samples to the metrics ingest endpoint.
 func (c *Client) sendBatch(batch []reportEntry) {
 	if len(batch) == 0 {
 		return
 	}
 
-	// Wrap in payload format
+	// Wrap in payload format (project_id is in header, not body)
 	payload := batchPayload{
-		ProjectID: c.projectID,
-		Samples:   batch,
+		Samples: batch,
 	}
 
 	// Marshal to JSON
-	data, err := json.Marshal(payload)
+	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		c.logger.Error("failed to marshal batch", "error", err)
 		atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
@@ -630,9 +654,9 @@ func (c *Client) sendBatch(batch []reportEntry) {
 	}
 
 	// GZIP compress
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	if _, err := gz.Write(data); err != nil {
+	var compressed bytes.Buffer
+	gz := gzip.NewWriter(&compressed)
+	if _, err := gz.Write(jsonData); err != nil {
 		c.logger.Error("failed to gzip batch", "error", err)
 		atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
 		return
@@ -642,10 +666,31 @@ func (c *Client) sendBatch(batch []reportEntry) {
 		atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
 		return
 	}
+	wireBytes := compressed.Bytes()
+
+	// Generate timestamp for signing
+	timestampMs := time.Now().UnixMilli()
+	timestampStr := strconv.FormatInt(timestampMs, 10)
+
+	// Compute HMAC signature on compressed bytes: sign "{timestamp_ms}.{compressed_body}"
+	// This is the "sign what you send" approach - signature covers the wire bytes.
+	var signature string
+	if c.ingestSecret != "" {
+		secretBytes, err := hex.DecodeString(c.ingestSecret)
+		if err != nil {
+			c.logger.Error("failed to decode ingest secret", "error", err)
+			atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
+			return
+		}
+		message := timestampStr + "." + string(wireBytes)
+		mac := hmac.New(sha256.New, secretBytes)
+		mac.Write([]byte(message))
+		signature = "v1=" + hex.EncodeToString(mac.Sum(nil))
+	}
 
 	// Exponential backoff: 100ms, 400ms, 1s (max 3 retries)
 	backoffs := []time.Duration{100 * time.Millisecond, 400 * time.Millisecond, 1 * time.Second}
-	url := c.baseURL + "/v1/projects/" + c.projectID + "/samples"
+	url := c.baseURL + "/v1/metrics"
 
 	for attempt := 0; attempt <= len(backoffs); attempt++ {
 		// Don't retry if context is cancelled (shutdown in progress)
@@ -665,15 +710,19 @@ func (c *Client) sendBatch(batch []reportEntry) {
 			}
 		}
 
-		req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, url, bytes.NewReader(buf.Bytes()))
+		req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, url, bytes.NewReader(wireBytes))
 		if err != nil {
 			c.logger.Error("failed to create request", "error", err)
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Content-Encoding", "gzip")
-		if c.ingestKey != "" {
-			req.Header.Set("Authorization", "Bearer "+c.ingestKey)
+
+		// HMAC signature authentication
+		req.Header.Set("x-eb-project-id", c.projectID)
+		req.Header.Set("x-eb-timestamp", timestampStr)
+		if signature != "" {
+			req.Header.Set("x-eb-signature", signature)
 		}
 
 		resp, err := c.httpClient.Do(req)

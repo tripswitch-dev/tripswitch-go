@@ -29,6 +29,15 @@ func (m *mockLogger) LastMsg() string {
 	return ""
 }
 
+// testBreaker creates a Breaker for testing with the given name.
+func testBreaker(name string) Breaker {
+	return Breaker{
+		Name:     name,
+		RouterID: "test-router-id",
+		Metric:   "test-metric",
+	}
+}
+
 func TestNewClient(t *testing.T) {
 	// Start a mock SSE server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,8 +82,8 @@ func TestNewClient(t *testing.T) {
 	if ts.apiKey != apiKey {
 		t.Errorf("expected apiKey %q, got %q", apiKey, ts.apiKey)
 	}
-	if ts.ingestKey != ingestKey {
-		t.Errorf("expected ingestKey %q, got %q", ingestKey, ts.ingestKey)
+	if ts.ingestSecret != ingestKey {
+		t.Errorf("expected ingestSecret %q, got %q", ingestKey, ts.ingestSecret)
 	}
 	if ts.failOpen != false {
 		t.Errorf("expected failOpen to be false")
@@ -294,7 +303,7 @@ func TestExecute_ClosedBreaker(t *testing.T) {
 	defer cleanup()
 
 	// Breaker not in cache = fail-open (allowed)
-	result, err := Execute(client, context.Background(), "unknown-breaker", func() (string, error) {
+	result, err := Execute(client, context.Background(), testBreaker("unknown-breaker"), func() (string, error) {
 		return "success", nil
 	})
 
@@ -315,7 +324,7 @@ func TestExecute_OpenBreaker(t *testing.T) {
 	client.breakerStates["test-breaker"] = breakerState{State: "open", AllowRate: 0}
 	client.breakerStatesMu.Unlock()
 
-	result, err := Execute(client, context.Background(), "test-breaker", func() (string, error) {
+	result, err := Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
 		t.Error("task should not be executed when breaker is open")
 		return "should-not-run", nil
 	})
@@ -337,7 +346,7 @@ func TestExecute_HalfOpenBreaker(t *testing.T) {
 	client.breakerStates["throttled-breaker"] = breakerState{State: "half_open", AllowRate: 0}
 	client.breakerStatesMu.Unlock()
 
-	_, err := Execute(client, context.Background(), "throttled-breaker", func() (string, error) {
+	_, err := Execute(client, context.Background(), testBreaker("throttled-breaker"), func() (string, error) {
 		t.Error("task should not be executed when throttled")
 		return "should-not-run", nil
 	})
@@ -351,7 +360,7 @@ func TestExecute_HalfOpenBreaker(t *testing.T) {
 	client.breakerStates["allowed-breaker"] = breakerState{State: "half_open", AllowRate: 1.0}
 	client.breakerStatesMu.Unlock()
 
-	result, err := Execute(client, context.Background(), "allowed-breaker", func() (string, error) {
+	result, err := Execute(client, context.Background(), testBreaker("allowed-breaker"), func() (string, error) {
 		return "allowed", nil
 	})
 
@@ -370,7 +379,7 @@ func TestExecute_ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	_, err := Execute(client, ctx, "test-breaker", func() (string, error) {
+	_, err := Execute(client, ctx, testBreaker("test-breaker"), func() (string, error) {
 		t.Error("task should not be executed when context is canceled")
 		return "should-not-run", nil
 	})
@@ -387,7 +396,7 @@ func TestExecute_WithIgnoreErrors(t *testing.T) {
 	errNotFound := errors.New("not found")
 
 	// Execute with ignored error - should report as OK
-	_, err := Execute(client, context.Background(), "test-breaker", func() (string, error) {
+	_, err := Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
 		return "", errNotFound
 	}, WithIgnoreErrors(errNotFound))
 
@@ -416,7 +425,7 @@ func TestExecute_WithErrorEvaluator(t *testing.T) {
 	}
 
 	// Error that evaluator says is NOT a failure
-	_, _ = Execute(client, context.Background(), "test-breaker", func() (string, error) {
+	_, _ = Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
 		return "", errors.New("ok-error")
 	}, WithErrorEvaluator(evaluator))
 
@@ -430,7 +439,7 @@ func TestExecute_WithErrorEvaluator(t *testing.T) {
 	}
 
 	// Error that evaluator says IS a failure
-	_, _ = Execute(client, context.Background(), "test-breaker", func() (string, error) {
+	_, _ = Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
 		return "", errors.New("bad-error")
 	}, WithErrorEvaluator(evaluator))
 
@@ -448,7 +457,7 @@ func TestExecute_WithTags(t *testing.T) {
 	client, cleanup := newTestClient(t, WithGlobalTags(map[string]string{"env": "test", "service": "api"}))
 	defer cleanup()
 
-	_, _ = Execute(client, context.Background(), "test-breaker", func() (string, error) {
+	_, _ = Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
 		return "ok", nil
 	}, WithTags(map[string]string{"endpoint": "/users", "env": "override"}))
 
@@ -472,7 +481,7 @@ func TestExecute_WithTraceID(t *testing.T) {
 	client, cleanup := newTestClient(t)
 	defer cleanup()
 
-	_, _ = Execute(client, context.Background(), "test-breaker", func() (string, error) {
+	_, _ = Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
 		return "ok", nil
 	}, WithTraceID("explicit-trace-123"))
 
@@ -493,7 +502,7 @@ func TestExecute_TraceIDFromExtractor(t *testing.T) {
 	client, cleanup := newTestClient(t, WithTraceIDExtractor(extractor))
 	defer cleanup()
 
-	_, _ = Execute(client, context.Background(), "test-breaker", func() (string, error) {
+	_, _ = Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
 		return "ok", nil
 	})
 
@@ -514,7 +523,7 @@ func TestExecute_TraceIDOptionOverridesExtractor(t *testing.T) {
 	client, cleanup := newTestClient(t, WithTraceIDExtractor(extractor))
 	defer cleanup()
 
-	_, _ = Execute(client, context.Background(), "test-breaker", func() (string, error) {
+	_, _ = Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
 		return "ok", nil
 	}, WithTraceID("option-trace"))
 
@@ -636,10 +645,13 @@ func TestIsAllowed(t *testing.T) {
 func TestSendBatch_PayloadFormat(t *testing.T) {
 	var receivedPayload batchPayload
 	var receivedEncoding string
+	var receivedProjectID string
+	var receivedTimestamp string
+	var receivedSignature string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check for SSE endpoint vs samples endpoint
-		if r.URL.Path != "/v1/projects/proj_test/samples" {
+		// Check for SSE endpoint vs metrics endpoint
+		if r.URL.Path != "/v1/metrics" {
 			// SSE endpoint - keep alive
 			flusher, ok := w.(http.Flusher)
 			if !ok {
@@ -652,10 +664,13 @@ func TestSendBatch_PayloadFormat(t *testing.T) {
 			return
 		}
 
-		// Samples endpoint
+		// Metrics endpoint
 		receivedEncoding = r.Header.Get("Content-Encoding")
+		receivedProjectID = r.Header.Get("x-eb-project-id")
+		receivedTimestamp = r.Header.Get("x-eb-timestamp")
+		receivedSignature = r.Header.Get("x-eb-signature")
 
-		// Decompress GZIP
+		// Decompress GZIP and decode JSON
 		gr, err := gzip.NewReader(r.Body)
 		if err != nil {
 			t.Errorf("failed to create gzip reader: %v", err)
@@ -670,11 +685,13 @@ func TestSendBatch_PayloadFormat(t *testing.T) {
 			return
 		}
 
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer server.Close()
 
-	client := NewClient("proj_test", WithBaseURL(server.URL), WithIngestKey("ik_test"))
+	// Use a valid 64-char hex string for the ingest secret
+	ingestSecret := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	client := NewClient("proj_test", WithBaseURL(server.URL), WithIngestSecret(ingestSecret))
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -682,35 +699,45 @@ func TestSendBatch_PayloadFormat(t *testing.T) {
 	}()
 
 	// Send a batch directly
-	testTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	testTsMs := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC).UnixMilli()
 	batch := []reportEntry{
 		{
-			Name:      "checkout",
-			OK:        true,
-			Value:     1.0,
-			TraceID:   "abc123",
-			Tags:      map[string]string{"tier": "premium"},
-			Timestamp: testTime,
+			RouterID: "router-123",
+			Metric:   "error_rate",
+			TsMs:     testTsMs,
+			OK:       true,
+			Value:    1.0,
+			TraceID:  "abc123",
+			Tags:     map[string]string{"tier": "premium"},
 		},
 		{
-			Name:      "checkout",
-			OK:        false,
-			Value:     1.0,
-			TraceID:   "def456",
-			Tags:      map[string]string{"tier": "free"},
-			Timestamp: testTime.Add(time.Second),
+			RouterID: "router-123",
+			Metric:   "error_rate",
+			TsMs:     testTsMs + 1000,
+			OK:       false,
+			Value:    1.0,
+			TraceID:  "def456",
+			Tags:     map[string]string{"tier": "free"},
 		},
 	}
 
 	client.sendBatch(batch)
 
-	// Verify payload format
+	// Verify headers
 	if receivedEncoding != "gzip" {
 		t.Errorf("expected Content-Encoding: gzip, got %q", receivedEncoding)
 	}
 
-	if receivedPayload.ProjectID != "proj_test" {
-		t.Errorf("expected project_id 'proj_test', got %q", receivedPayload.ProjectID)
+	if receivedProjectID != "proj_test" {
+		t.Errorf("expected x-eb-project-id 'proj_test', got %q", receivedProjectID)
+	}
+
+	if receivedTimestamp == "" {
+		t.Error("expected x-eb-timestamp to be set")
+	}
+
+	if receivedSignature == "" {
+		t.Error("expected x-eb-signature to be set")
 	}
 
 	if len(receivedPayload.Samples) != 2 {
@@ -718,8 +745,11 @@ func TestSendBatch_PayloadFormat(t *testing.T) {
 	}
 
 	sample := receivedPayload.Samples[0]
-	if sample.Name != "checkout" {
-		t.Errorf("expected name 'checkout', got %q", sample.Name)
+	if sample.RouterID != "router-123" {
+		t.Errorf("expected router_id 'router-123', got %q", sample.RouterID)
+	}
+	if sample.Metric != "error_rate" {
+		t.Errorf("expected metric 'error_rate', got %q", sample.Metric)
 	}
 	if !sample.OK {
 		t.Error("expected first sample OK to be true")

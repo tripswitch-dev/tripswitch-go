@@ -21,7 +21,7 @@ func main() {
 	// Create Tripswitch client
 	ts := tripswitch.NewClient("proj_abc123",
 		tripswitch.WithAPIKey("sk_live_..."),
-		tripswitch.WithIngestKey("ik_live_..."),
+		tripswitch.WithIngestSecret("..."), // 64-char hex string
 	)
 
 	// Wait for initial state sync
@@ -32,6 +32,13 @@ func main() {
 	}
 	cancel()
 
+	// Define the breaker (get these values from your breaker config via API or dashboard)
+	breaker := tripswitch.Breaker{
+		Name:     "data-fetch",                            // Breaker name (matches SSE events)
+		RouterID: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", // UUID from breaker config
+		Metric:   "error_rate",                            // Metric name from breaker config
+	}
+
 	// Set up signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -39,7 +46,7 @@ func main() {
 	// Create HTTP server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/data", func(w http.ResponseWriter, r *http.Request) {
-		result, err := tripswitch.Execute(ts, r.Context(), "data-fetch", func() (string, error) {
+		result, err := tripswitch.Execute(ts, r.Context(), breaker, func() (string, error) {
 			// Simulated work
 			return "Hello, World!", nil
 		})

@@ -27,7 +27,7 @@ func main() {
 	// Create Tripswitch client
 	ts := tripswitch.NewClient("proj_abc123",
 		tripswitch.WithAPIKey("sk_live_..."),
-		tripswitch.WithIngestKey("ik_live_..."),
+		tripswitch.WithIngestSecret("..."), // 64-char hex string
 	)
 	defer ts.Close(context.Background())
 
@@ -38,8 +38,15 @@ func main() {
 		log.Fatal("tripswitch failed to initialize:", err)
 	}
 
+	// Define the breaker (get these values from your breaker config via API or dashboard)
+	breaker := tripswitch.Breaker{
+		Name:     "user-lookup",                           // Breaker name (matches SSE events)
+		RouterID: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", // UUID from breaker config
+		Metric:   "error_rate",                            // Metric name from breaker config
+	}
+
 	// Look up user - sql.ErrNoRows should NOT trip the breaker
-	user, err := tripswitch.Execute(ts, ctx, "user-lookup", func() (*User, error) {
+	user, err := tripswitch.Execute(ts, ctx, breaker, func() (*User, error) {
 		return findUserByID(ctx, 123)
 	}, tripswitch.WithIgnoreErrors(sql.ErrNoRows))
 

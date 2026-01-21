@@ -24,7 +24,7 @@ func main() {
 	// Create Tripswitch client with global tags
 	ts := tripswitch.NewClient("proj_abc123",
 		tripswitch.WithAPIKey("sk_live_..."),
-		tripswitch.WithIngestKey("ik_live_..."),
+		tripswitch.WithIngestSecret("..."), // 64-char hex string
 		// Global tags applied to ALL samples
 		tripswitch.WithGlobalTags(map[string]string{
 			"service": "api-gateway",
@@ -41,13 +41,25 @@ func main() {
 		log.Fatal("tripswitch failed to initialize:", err)
 	}
 
+	// Define breakers (get these values from your breaker config via API or dashboard)
+	checkoutBreaker := tripswitch.Breaker{
+		Name:     "checkout",                              // Breaker name (matches SSE events)
+		RouterID: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", // UUID from breaker config
+		Metric:   "error_rate",                            // Metric name from breaker config
+	}
+	paymentBreaker := tripswitch.Breaker{
+		Name:     "payment",                               // Breaker name (matches SSE events)
+		RouterID: "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy", // UUID from breaker config
+		Metric:   "error_rate",                            // Metric name from breaker config
+	}
+
 	// Simulate handling an HTTP request
 	user := &User{ID: "user_123", Tier: "enterprise"}
 	endpoint := "/api/v1/checkout"
 
 	// Execute with per-request tags (merged with global tags)
 	// Per-request tags override global tags on key conflict
-	result, err := tripswitch.Execute(ts, ctx, "checkout", func() (string, error) {
+	result, err := tripswitch.Execute(ts, ctx, checkoutBreaker, func() (string, error) {
 		return processCheckout(ctx, user)
 	}, tripswitch.WithTags(map[string]string{
 		"user_tier": user.Tier,
@@ -66,7 +78,7 @@ func main() {
 	fmt.Printf("Checkout complete: %s\n", result)
 
 	// You can also override the trace ID explicitly if needed
-	_, _ = tripswitch.Execute(ts, ctx, "payment", func() (bool, error) {
+	_, _ = tripswitch.Execute(ts, ctx, paymentBreaker, func() (bool, error) {
 		return processPayment(ctx)
 	},
 		tripswitch.WithTraceID("custom-trace-id-123"),
