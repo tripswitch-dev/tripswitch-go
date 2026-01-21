@@ -9,35 +9,62 @@ import (
 
 // Integration tests are gated by environment variables.
 // Run with:
-//   TRIPSWITCH_API_KEY=sk_... TRIPSWITCH_INGEST_KEY=ik_... TRIPSWITCH_PROJECT_ID=proj_... go test -v -run Integration
+//
+//	TRIPSWITCH_API_KEY=sk_...
+//	TRIPSWITCH_INGEST_SECRET=<64-char-hex>
+//	TRIPSWITCH_PROJECT_ID=proj_...
+//	TRIPSWITCH_BREAKER_NAME=my-breaker
+//	TRIPSWITCH_BREAKER_ROUTER_ID=router-id
+//	TRIPSWITCH_BREAKER_METRIC=metric-name
+//	go test -v -run Integration
 //
 // Optional:
-//   TRIPSWITCH_BASE_URL=https://api.tripswitch.dev (defaults to production)
+//
+//	TRIPSWITCH_BASE_URL=https://api.tripswitch.dev (defaults to production)
 
-func skipIfNoEnv(t *testing.T) (apiKey, ingestKey, projectID, baseURL string) {
-	apiKey = os.Getenv("TRIPSWITCH_API_KEY")
-	ingestKey = os.Getenv("TRIPSWITCH_INGEST_KEY")
-	projectID = os.Getenv("TRIPSWITCH_PROJECT_ID")
-	baseURL = os.Getenv("TRIPSWITCH_BASE_URL")
+type testConfig struct {
+	apiKey       string
+	ingestSecret string
+	projectID    string
+	baseURL      string
+	breaker      Breaker
+}
 
-	if apiKey == "" || projectID == "" {
+func skipIfNoEnv(t *testing.T) testConfig {
+	cfg := testConfig{
+		apiKey:       os.Getenv("TRIPSWITCH_API_KEY"),
+		ingestSecret: os.Getenv("TRIPSWITCH_INGEST_SECRET"),
+		projectID:    os.Getenv("TRIPSWITCH_PROJECT_ID"),
+		baseURL:      os.Getenv("TRIPSWITCH_BASE_URL"),
+		breaker: Breaker{
+			Name:     os.Getenv("TRIPSWITCH_BREAKER_NAME"),
+			RouterID: os.Getenv("TRIPSWITCH_BREAKER_ROUTER_ID"),
+			Metric:   os.Getenv("TRIPSWITCH_BREAKER_METRIC"),
+		},
+	}
+
+	if cfg.apiKey == "" || cfg.projectID == "" {
 		t.Skip("Skipping integration test: TRIPSWITCH_API_KEY and TRIPSWITCH_PROJECT_ID must be set")
 	}
 
-	if baseURL == "" {
-		baseURL = "https://api.tripswitch.dev"
+	if cfg.breaker.Name == "" || cfg.breaker.RouterID == "" || cfg.breaker.Metric == "" {
+		t.Skip("Skipping integration test: TRIPSWITCH_BREAKER_NAME, TRIPSWITCH_BREAKER_ROUTER_ID, and TRIPSWITCH_BREAKER_METRIC must be set")
 	}
 
-	return apiKey, ingestKey, projectID, baseURL
+	if cfg.baseURL == "" {
+		cfg.baseURL = "https://api.tripswitch.dev"
+	}
+
+	return cfg
 }
 
 func TestIntegration_Ready(t *testing.T) {
-	apiKey, ingestKey, projectID, baseURL := skipIfNoEnv(t)
+	cfg := skipIfNoEnv(t)
 
-	client := NewClient(projectID,
-		WithAPIKey(apiKey),
-		WithIngestKey(ingestKey),
-		WithBaseURL(baseURL),
+	client := NewClient(cfg.projectID,
+		WithAPIKey(cfg.apiKey),
+		WithIngestSecret(cfg.ingestSecret),
+		WithBaseURL(cfg.baseURL),
 	)
 	defer client.Close(context.Background())
 
@@ -53,12 +80,12 @@ func TestIntegration_Ready(t *testing.T) {
 }
 
 func TestIntegration_Execute(t *testing.T) {
-	apiKey, ingestKey, projectID, baseURL := skipIfNoEnv(t)
+	cfg := skipIfNoEnv(t)
 
-	client := NewClient(projectID,
-		WithAPIKey(apiKey),
-		WithIngestKey(ingestKey),
-		WithBaseURL(baseURL),
+	client := NewClient(cfg.projectID,
+		WithAPIKey(cfg.apiKey),
+		WithIngestSecret(cfg.ingestSecret),
+		WithBaseURL(cfg.baseURL),
 	)
 	defer client.Close(context.Background())
 
@@ -70,8 +97,8 @@ func TestIntegration_Execute(t *testing.T) {
 		t.Fatalf("Ready failed: %v", err)
 	}
 
-	// Execute a simple task - use a breaker name that likely exists
-	result, err := Execute(client, ctx, "integration-test-breaker", func() (string, error) {
+	// Execute a simple task using the configured breaker
+	result, err := Execute(client, ctx, cfg.breaker, func() (string, error) {
 		return "success", nil
 	})
 
@@ -91,12 +118,12 @@ func TestIntegration_Execute(t *testing.T) {
 }
 
 func TestIntegration_Stats(t *testing.T) {
-	apiKey, ingestKey, projectID, baseURL := skipIfNoEnv(t)
+	cfg := skipIfNoEnv(t)
 
-	client := NewClient(projectID,
-		WithAPIKey(apiKey),
-		WithIngestKey(ingestKey),
-		WithBaseURL(baseURL),
+	client := NewClient(cfg.projectID,
+		WithAPIKey(cfg.apiKey),
+		WithIngestSecret(cfg.ingestSecret),
+		WithBaseURL(cfg.baseURL),
 	)
 	defer client.Close(context.Background())
 
@@ -118,12 +145,12 @@ func TestIntegration_Stats(t *testing.T) {
 }
 
 func TestIntegration_GracefulShutdown(t *testing.T) {
-	apiKey, ingestKey, projectID, baseURL := skipIfNoEnv(t)
+	cfg := skipIfNoEnv(t)
 
-	client := NewClient(projectID,
-		WithAPIKey(apiKey),
-		WithIngestKey(ingestKey),
-		WithBaseURL(baseURL),
+	client := NewClient(cfg.projectID,
+		WithAPIKey(cfg.apiKey),
+		WithIngestSecret(cfg.ingestSecret),
+		WithBaseURL(cfg.baseURL),
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -136,7 +163,7 @@ func TestIntegration_GracefulShutdown(t *testing.T) {
 
 	// Execute a few tasks to generate samples
 	for i := 0; i < 5; i++ {
-		Execute(client, ctx, "integration-test-breaker", func() (int, error) {
+		Execute(client, ctx, cfg.breaker, func() (int, error) {
 			return i, nil
 		})
 	}

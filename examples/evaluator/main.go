@@ -29,7 +29,7 @@ func main() {
 	// Create Tripswitch client
 	ts := tripswitch.NewClient("proj_abc123",
 		tripswitch.WithAPIKey("sk_live_..."),
-		tripswitch.WithIngestKey("ik_live_..."),
+		tripswitch.WithIngestSecret("..."), // 64-char hex string
 	)
 	defer ts.Close(context.Background())
 
@@ -38,6 +38,13 @@ func main() {
 	defer cancel()
 	if err := ts.Ready(ctx); err != nil {
 		log.Fatal("tripswitch failed to initialize:", err)
+	}
+
+	// Define the breaker (get these values from your breaker config via API or dashboard)
+	breaker := tripswitch.Breaker{
+		Name:     "payment-api",                           // Breaker name (matches SSE events)
+		RouterID: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", // UUID from breaker config
+		Metric:   "error_rate",                            // Metric name from breaker config
 	}
 
 	// Custom error evaluator: only count 5xx errors as failures
@@ -53,7 +60,7 @@ func main() {
 	}
 
 	// Make API call with custom evaluator
-	result, err := tripswitch.Execute(ts, ctx, "payment-api", func() (string, error) {
+	result, err := tripswitch.Execute(ts, ctx, breaker, func() (string, error) {
 		return callPaymentAPI(ctx)
 	}, tripswitch.WithErrorEvaluator(isServerError))
 
