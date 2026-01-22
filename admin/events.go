@@ -39,19 +39,9 @@ func (c *Client) ListEvents(ctx context.Context, projectID string, params ListEv
 	return &result, nil
 }
 
-// GetStatus retrieves the project status summary.
-func (c *Client) GetStatus(ctx context.Context, projectID string, opts ...RequestOption) (*Status, error) {
-	var status Status
-	err := c.do(ctx, request{
-		method:  http.MethodGet,
-		path:    "/v1/projects/" + projectID + "/status",
-		options: opts,
-	}, &status)
-	if err != nil {
-		return nil, err
-	}
-	return &status, nil
-}
+// GetStatus is no longer available in the admin client.
+// Use tripswitch.Client.GetStatus() instead, which requires a project API key (eb_pk_).
+// The status endpoint is a runtime read operation and belongs with the runtime client.
 
 // EventPager provides paginated iteration over events.
 type EventPager struct {

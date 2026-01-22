@@ -12,12 +12,12 @@ import (
 
 func TestNewClient(t *testing.T) {
 	client := NewClient(
-		WithAPIKey("sk_test"),
+		WithAPIKey("eb_admin_test"),
 		WithBaseURL("https://custom.api.dev"),
 	)
 
-	if client.apiKey != "sk_test" {
-		t.Errorf("expected apiKey 'sk_test', got %q", client.apiKey)
+	if client.apiKey != "eb_admin_test" {
+		t.Errorf("expected apiKey 'eb_admin_test', got %q", client.apiKey)
 	}
 	if client.baseURL != "https://custom.api.dev" {
 		t.Errorf("expected baseURL 'https://custom.api.dev', got %q", client.baseURL)
@@ -32,7 +32,7 @@ func TestGetProject(t *testing.T) {
 		if r.URL.Path != "/v1/projects/proj_123" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		if auth := r.Header.Get("Authorization"); auth != "Bearer sk_test" {
+		if auth := r.Header.Get("Authorization"); auth != "Bearer eb_admin_test" {
 			t.Errorf("unexpected auth header: %s", auth)
 		}
 
@@ -45,7 +45,7 @@ func TestGetProject(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(
-		WithAPIKey("sk_test"),
+		WithAPIKey("eb_admin_test"),
 		WithBaseURL(server.URL),
 	)
 
@@ -336,7 +336,7 @@ func TestRequestOptions(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(WithBaseURL(server.URL), WithAPIKey("sk_test"))
+	client := NewClient(WithBaseURL(server.URL), WithAPIKey("eb_admin_test"))
 
 	_, err := client.GetProject(context.Background(), "proj_123",
 		WithRequestID("trace_123"),
@@ -506,30 +506,8 @@ func TestListEvents(t *testing.T) {
 	}
 }
 
-func TestGetStatus(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(Status{
-			OpenCount:   2,
-			ClosedCount: 8,
-			LastEvalMs:  1234567890,
-		})
-	}))
-	defer server.Close()
-
-	client := NewClient(WithBaseURL(server.URL))
-
-	status, err := client.GetStatus(context.Background(), "proj_123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if status.ClosedCount != 8 {
-		t.Errorf("expected 8 closed breakers, got %d", status.ClosedCount)
-	}
-	if status.OpenCount != 2 {
-		t.Errorf("expected 2 open breakers, got %d", status.OpenCount)
-	}
-}
+// TestGetStatus removed - GetStatus moved to runtime client (tripswitch.Client)
+// See tripswitch_test.go for the new test.
 
 func TestBreakerPager(t *testing.T) {
 	callCount := 0

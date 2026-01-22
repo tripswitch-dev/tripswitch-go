@@ -10,7 +10,7 @@ import (
 // Integration tests are gated by environment variables.
 // Run with:
 //
-//	TRIPSWITCH_API_KEY=sk_...
+//	TRIPSWITCH_API_KEY=eb_pk_...
 //	TRIPSWITCH_INGEST_SECRET=<64-char-hex>
 //	TRIPSWITCH_PROJECT_ID=proj_...
 //	TRIPSWITCH_BREAKER_NAME=my-breaker
@@ -178,4 +178,28 @@ func TestIntegration_GracefulShutdown(t *testing.T) {
 	}
 
 	t.Log("Graceful shutdown completed")
+}
+
+func TestIntegration_GetStatus(t *testing.T) {
+	cfg := skipIfNoEnv(t)
+
+	client := NewClient(cfg.projectID,
+		WithAPIKey(cfg.apiKey),
+		WithBaseURL(cfg.baseURL),
+	)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client.Close(ctx)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	status, err := client.GetStatus(ctx)
+	if err != nil {
+		t.Fatalf("GetStatus failed: %v", err)
+	}
+
+	t.Logf("Status: %d open, %d closed", status.OpenCount, status.ClosedCount)
 }

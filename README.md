@@ -38,7 +38,7 @@ import (
 func main() {
     // Create client
     ts := tripswitch.NewClient("proj_abc123",
-        tripswitch.WithAPIKey("sk_..."),
+        tripswitch.WithAPIKey("eb_pk_..."),
         tripswitch.WithIngestKey("ik_..."),
     )
     defer ts.Close(context.Background())

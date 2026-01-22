@@ -54,7 +54,7 @@ func TestNewClient(t *testing.T) {
 	defer server.Close()
 
 	projectID := "proj_123"
-	apiKey := "sk_abc"
+	apiKey := "eb_pk_test"
 	ingestKey := "ik_def"
 	logger := &mockLogger{}
 	tags := map[string]string{"env": "testing"}
@@ -645,13 +645,13 @@ func TestIsAllowed(t *testing.T) {
 func TestSendBatch_PayloadFormat(t *testing.T) {
 	var receivedPayload batchPayload
 	var receivedEncoding string
-	var receivedProjectID string
 	var receivedTimestamp string
 	var receivedSignature string
+	var receivedPath string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check for SSE endpoint vs metrics endpoint
-		if r.URL.Path != "/v1/metrics" {
+		// Check for SSE endpoint vs ingest endpoint
+		if r.URL.Path != "/v1/projects/proj_test/ingest" {
 			// SSE endpoint - keep alive
 			flusher, ok := w.(http.Flusher)
 			if !ok {
@@ -664,11 +664,11 @@ func TestSendBatch_PayloadFormat(t *testing.T) {
 			return
 		}
 
-		// Metrics endpoint
+		// Ingest endpoint
+		receivedPath = r.URL.Path
 		receivedEncoding = r.Header.Get("Content-Encoding")
-		receivedProjectID = r.Header.Get("x-eb-project-id")
-		receivedTimestamp = r.Header.Get("x-eb-timestamp")
-		receivedSignature = r.Header.Get("x-eb-signature")
+		receivedTimestamp = r.Header.Get("X-EB-Timestamp")
+		receivedSignature = r.Header.Get("X-EB-Signature")
 
 		// Decompress GZIP and decode JSON
 		gr, err := gzip.NewReader(r.Body)
@@ -723,21 +723,21 @@ func TestSendBatch_PayloadFormat(t *testing.T) {
 
 	client.sendBatch(batch)
 
-	// Verify headers
+	// Verify path and headers
+	if receivedPath != "/v1/projects/proj_test/ingest" {
+		t.Errorf("expected path '/v1/projects/proj_test/ingest', got %q", receivedPath)
+	}
+
 	if receivedEncoding != "gzip" {
 		t.Errorf("expected Content-Encoding: gzip, got %q", receivedEncoding)
 	}
 
-	if receivedProjectID != "proj_test" {
-		t.Errorf("expected x-eb-project-id 'proj_test', got %q", receivedProjectID)
-	}
-
 	if receivedTimestamp == "" {
-		t.Error("expected x-eb-timestamp to be set")
+		t.Error("expected X-EB-Timestamp to be set")
 	}
 
 	if receivedSignature == "" {
-		t.Error("expected x-eb-signature to be set")
+		t.Error("expected X-EB-Signature to be set")
 	}
 
 	if len(receivedPayload.Samples) != 2 {
@@ -759,5 +759,62 @@ func TestSendBatch_PayloadFormat(t *testing.T) {
 	}
 	if sample.Tags["tier"] != "premium" {
 		t.Errorf("expected tier 'premium', got %q", sample.Tags["tier"])
+	}
+}
+
+func TestGetStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// SSE endpoint
+		if r.URL.Path != "/v1/projects/proj_123/status" {
+			flusher, ok := w.(http.Flusher)
+			if !ok {
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintf(w, "data: {\"breaker\": \"test\", \"state\": \"closed\", \"allow_rate\": 1.0}\n\n")
+			flusher.Flush()
+			<-r.Context().Done()
+			return
+		}
+
+		// Status endpoint
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if auth := r.Header.Get("Authorization"); auth != "Bearer eb_pk_test" {
+			t.Errorf("unexpected auth header: %s", auth)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(Status{
+			OpenCount:   2,
+			ClosedCount: 8,
+			LastEvalMs:  1234567890,
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient("proj_123",
+		WithAPIKey("eb_pk_test"),
+		WithBaseURL(server.URL),
+	)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client.Close(ctx)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	status, err := client.GetStatus(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.OpenCount != 2 {
+		t.Errorf("expected 2 open breakers, got %d", status.OpenCount)
+	}
+	if status.ClosedCount != 8 {
+		t.Errorf("expected 8 closed breakers, got %d", status.ClosedCount)
 	}
 }

@@ -9,7 +9,7 @@ import (
 
 // Integration tests are gated by environment variables.
 // Run with:
-//   TRIPSWITCH_API_KEY=sk_... TRIPSWITCH_PROJECT_ID=proj_... go test -v -run Integration
+//   TRIPSWITCH_API_KEY=eb_admin_... TRIPSWITCH_PROJECT_ID=proj_... go test -v -run Integration
 //
 // Optional:
 //   TRIPSWITCH_BASE_URL=https://api.tripswitch.dev (defaults to production)
@@ -75,27 +75,8 @@ func TestIntegration_ListBreakers(t *testing.T) {
 	}
 }
 
-func TestIntegration_GetStatus(t *testing.T) {
-	apiKey, projectID, baseURL := skipIfNoEnv(t)
-
-	client := NewClient(
-		WithAPIKey(apiKey),
-		WithBaseURL(baseURL),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	status, err := client.GetStatus(ctx, projectID)
-	if err != nil {
-		t.Fatalf("GetStatus failed: %v", err)
-	}
-
-	t.Logf("Status: %d open, %d closed",
-		status.OpenCount,
-		status.ClosedCount,
-	)
-}
+// TestIntegration_GetStatus removed - GetStatus moved to runtime client (tripswitch.Client)
+// because it requires a project API key (eb_pk_), not an admin key.
 
 func TestIntegration_BreakerCRUD(t *testing.T) {
 	apiKey, projectID, baseURL := skipIfNoEnv(t)

@@ -18,7 +18,7 @@ import (
 func main() {
 	// Create Tripswitch client
 	ts := tripswitch.NewClient("proj_abc123",
-		tripswitch.WithAPIKey("sk_live_..."),
+		tripswitch.WithAPIKey("eb_pk_..."),
 		tripswitch.WithIngestSecret("..."), // 64-char hex string
 	)
 	defer ts.Close(context.Background())

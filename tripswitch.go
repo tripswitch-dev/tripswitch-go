@@ -5,11 +5,19 @@
 // and automatically reports execution samples to the Tripswitch API. It is goroutine-safe
 // and designed for high-throughput applications.
 //
+// # Authentication
+//
+// The runtime client uses two credentials:
+//   - Project API key (eb_pk_...): For SSE subscriptions and state reads
+//   - Ingest secret: For HMAC-signed sample ingestion
+//
+// Create project keys via the admin API or Tripswitch dashboard.
+//
 // # Quick Start
 //
 //	ts := tripswitch.NewClient("proj_abc123",
-//	    tripswitch.WithAPIKey("sk_..."),
-//	    tripswitch.WithIngestSecret("..."), // 64-char hex string
+//	    tripswitch.WithAPIKey("eb_pk_..."),   // project key for SSE
+//	    tripswitch.WithIngestSecret("..."),   // 64-char hex string for HMAC
 //	)
 //	defer ts.Close(context.Background())
 //
@@ -203,7 +211,8 @@ func (c *Client) Stats() SDKStats {
 	}
 }
 
-// WithAPIKey sets the API key for the client.
+// WithAPIKey sets the project API key for SSE subscriptions and state reads.
+// Project keys have the prefix "eb_pk_" and are project-scoped.
 func WithAPIKey(key string) Option {
 	return func(c *Client) {
 		c.apiKey = key
@@ -690,7 +699,7 @@ func (c *Client) sendBatch(batch []reportEntry) {
 
 	// Exponential backoff: 100ms, 400ms, 1s (max 3 retries)
 	backoffs := []time.Duration{100 * time.Millisecond, 400 * time.Millisecond, 1 * time.Second}
-	url := c.baseURL + "/v1/metrics"
+	url := c.baseURL + "/v1/projects/" + c.projectID + "/ingest"
 
 	for attempt := 0; attempt <= len(backoffs); attempt++ {
 		// Don't retry if context is cancelled (shutdown in progress)
@@ -718,11 +727,10 @@ func (c *Client) sendBatch(batch []reportEntry) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Content-Encoding", "gzip")
 
-		// HMAC signature authentication
-		req.Header.Set("x-eb-project-id", c.projectID)
-		req.Header.Set("x-eb-timestamp", timestampStr)
+		// HMAC signature authentication (project is in URL path)
+		req.Header.Set("X-EB-Timestamp", timestampStr)
 		if signature != "" {
-			req.Header.Set("x-eb-signature", signature)
+			req.Header.Set("X-EB-Signature", signature)
 		}
 
 		resp, err := c.httpClient.Do(req)
@@ -748,4 +756,45 @@ func (c *Client) sendBatch(batch []reportEntry) {
 	// All retries exhausted
 	c.logger.Error("dropping batch after retries exhausted", "count", len(batch))
 	atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
+}
+
+// Status represents the project health status.
+type Status struct {
+	OpenCount   int   `json:"open_count"`
+	ClosedCount int   `json:"closed_count"`
+	LastEvalMs  int64 `json:"last_eval_ms,omitempty"`
+}
+
+// GetStatus retrieves the project health status from the API.
+// This returns the count of open and closed breakers for the project.
+// Requires a project API key (eb_pk_).
+func (c *Client) GetStatus(ctx context.Context) (*Status, error) {
+	url := c.baseURL + "/v1/projects/" + c.projectID + "/status"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("tripswitch: failed to create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("tripswitch: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("tripswitch: unexpected status code: %d", resp.StatusCode)
+	}
+
+	var status Status
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return nil, fmt.Errorf("tripswitch: failed to decode response: %w", err)
+	}
+
+	return &status, nil
 }

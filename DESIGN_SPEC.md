@@ -12,7 +12,7 @@ Project-scoped. One client per project, goroutine-safe.
 
 ```go
 ts := tripswitch.NewClient("proj_abc123",
-    tripswitch.WithAPIKey("sk_..."),
+    tripswitch.WithAPIKey("eb_pk_..."),
     tripswitch.WithIngestKey("ik_..."),
     tripswitch.WithFailOpen(true),                    // default: true
     tripswitch.WithBaseURL("https://..."),            // optional override
