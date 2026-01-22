@@ -2,8 +2,11 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/tripswitch-dev/tripswitch-go.svg)](https://pkg.go.dev/github.com/tripswitch-dev/tripswitch-go)
 [![Go Report Card](https://goreportcard.com/badge/github.com/tripswitch-dev/tripswitch-go)](https://goreportcard.com/report/github.com/tripswitch-dev/tripswitch-go)
+[![Version](https://img.shields.io/badge/version-v0.3.0-blue)](https://github.com/tripswitch-dev/tripswitch-go/releases/tag/v0.3.0)
 
 Official Go client SDK for [Tripswitch](https://tripswitch.dev) - a circuit breaker management service.
+
+> **v0.3.0 Breaking Changes:** This release introduces a two-tier authentication model. API keys are now split into project keys (`eb_pk_`) for runtime SDK usage and admin keys (`eb_admin_`) for management operations. See [Authentication](#authentication) for details.
 
 ## Features
 
@@ -20,6 +23,36 @@ go get github.com/tripswitch-dev/tripswitch-go
 ```
 
 **Requires Go 1.22+** (uses `math/rand/v2` for thread-safe random number generation)
+
+## Authentication
+
+Tripswitch uses a two-tier authentication model introduced in v0.3.0:
+
+### Runtime Credentials (SDK)
+
+For SDK initialization, you need two credentials from **Project Settings → SDK Keys**:
+
+| Credential | Prefix | Purpose |
+|------------|--------|---------|
+| **Project Key** | `eb_pk_` | SSE connection and state reads |
+| **Ingest Secret** | `ik_` | HMAC-signed sample ingestion |
+
+```go
+ts := tripswitch.NewClient("proj_abc123",
+    tripswitch.WithAPIKey("eb_pk_..."),    // Project key
+    tripswitch.WithIngestKey("ik_..."),    // Ingest secret
+)
+```
+
+### Admin Credentials (Management API)
+
+For management and automation tasks, use an **Admin Key** from **Organization Settings → Admin Keys**:
+
+| Credential | Prefix | Purpose |
+|------------|--------|---------|
+| **Admin Key** | `eb_admin_` | Organization-scoped management operations |
+
+Admin keys are used with the [Admin Client](#admin-client) for creating projects, managing breakers, and other administrative tasks—not for runtime SDK usage.
 
 ## Quick Start
 
@@ -74,8 +107,8 @@ func main() {
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `WithAPIKey(key)` | API key for SSE authentication | Required |
-| `WithIngestKey(key)` | Ingest key for sample reporting | Required |
+| `WithAPIKey(key)` | Project key (`eb_pk_`) for SSE authentication | Required |
+| `WithIngestKey(key)` | Ingest secret (`ik_`) for HMAC-signed sample reporting | Required |
 | `WithFailOpen(bool)` | Allow traffic when Tripswitch is unreachable | `true` |
 | `WithBaseURL(url)` | Override API endpoint | `https://api.tripswitch.dev` |
 | `WithLogger(logger)` | Custom logger (compatible with `slog.Logger`) | `slog.Default()` |
@@ -189,6 +222,35 @@ See the [examples](./examples) directory for complete, runnable examples:
 2. **Execute Check**: Each `Execute` call checks the local cache (no network call)
 3. **Sample Reporting**: Results are buffered and batched (500 samples or 15s, whichever comes first)
 4. **Graceful Degradation**: If Tripswitch is unreachable, the client fails open by default
+
+## Admin Client
+
+The `admin` package provides a client for management and automation tasks. This is separate from the runtime SDK and uses organization-scoped admin keys.
+
+```go
+import "github.com/tripswitch-dev/tripswitch-go/admin"
+
+client := admin.NewClient(
+    admin.WithAPIKey("eb_admin_..."), // From Organization Settings → Admin Keys
+)
+
+// Get project details
+project, err := client.GetProject(ctx, "proj_abc123")
+
+// List breakers
+page, err := client.ListBreakers(ctx, "proj_abc123", admin.ListParams{Limit: 100})
+
+// Create a breaker
+breaker, err := client.CreateBreaker(ctx, "proj_abc123", admin.CreateBreakerInput{
+    Name:      "api-latency",
+    Metric:    "latency_ms",
+    Kind:      admin.BreakerKindP95,
+    Op:        admin.BreakerOpGt,
+    Threshold: 500,
+})
+```
+
+**Note:** Admin keys (`eb_admin_`) are for management operations only. For runtime SDK usage, use project keys (`eb_pk_`) as shown in [Quick Start](#quick-start).
 
 ## Contributing
 
