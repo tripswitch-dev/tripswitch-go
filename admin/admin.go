@@ -4,10 +4,16 @@
 // administrative operations for managing projects, breakers, routers,
 // notification channels, and querying events and status.
 //
+// # Authentication
+//
+// The admin client requires an admin API key (prefix: eb_admin_).
+// Admin keys are org-scoped and grant access to all projects within the org.
+// Create admin keys via the Tripswitch dashboard or API.
+//
 // # Quick Start
 //
 //	client := admin.NewClient(
-//	    admin.WithAPIKey("sk_..."),
+//	    admin.WithAPIKey("eb_admin_..."),
 //	)
 //
 //	// Get project details
@@ -80,7 +86,8 @@ func NewClient(opts ...Option) *Client {
 	return c
 }
 
-// WithAPIKey sets the API key for authentication.
+// WithAPIKey sets the admin API key for authentication.
+// Admin keys have the prefix "eb_admin_" and are org-scoped.
 func WithAPIKey(key string) Option {
 	return func(c *Client) {
 		c.apiKey = key

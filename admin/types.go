@@ -278,9 +278,35 @@ type ListEventsResponse struct {
 	NextCursor *string `json:"next_cursor,omitempty"`
 }
 
-// Status represents the project status summary.
-type Status struct {
-	OpenCount   int   `json:"open_count"`
-	ClosedCount int   `json:"closed_count"`
-	LastEvalMs  int64 `json:"last_eval_ms,omitempty"`
+// ProjectKey represents a project API key (eb_pk_...).
+// Project keys are project-scoped and used for runtime operations
+// like SSE subscriptions and breaker state reads.
+type ProjectKey struct {
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	KeyPrefix  string     `json:"key_prefix"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	InsertedAt time.Time  `json:"inserted_at"`
+}
+
+// ListProjectKeysResponse contains the response from listing project keys.
+type ListProjectKeysResponse struct {
+	Keys  []ProjectKey `json:"keys"`
+	Count int          `json:"count"`
+}
+
+// CreateProjectKeyInput contains fields for creating a project key.
+type CreateProjectKeyInput struct {
+	Name string `json:"name,omitempty"`
+}
+
+// CreateProjectKeyResponse contains the response from creating a project key.
+// The Key field contains the full API key and is only returned on creation.
+// Store it securely as it cannot be retrieved later.
+type CreateProjectKeyResponse struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Key       string `json:"key"`
+	KeyPrefix string `json:"key_prefix"`
+	Message   string `json:"message,omitempty"`
 }

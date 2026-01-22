@@ -23,7 +23,7 @@ type User struct {
 func main() {
 	// Create Tripswitch client with global tags
 	ts := tripswitch.NewClient("proj_abc123",
-		tripswitch.WithAPIKey("sk_live_..."),
+		tripswitch.WithAPIKey("eb_pk_..."),
 		tripswitch.WithIngestSecret("..."), // 64-char hex string
 		// Global tags applied to ALL samples
 		tripswitch.WithGlobalTags(map[string]string{

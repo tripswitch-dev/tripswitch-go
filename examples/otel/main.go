@@ -20,7 +20,7 @@ import (
 func main() {
 	// Create Tripswitch client with OpenTelemetry trace ID extraction
 	ts := tripswitch.NewClient("proj_abc123",
-		tripswitch.WithAPIKey("sk_live_..."),
+		tripswitch.WithAPIKey("eb_pk_..."),
 		tripswitch.WithIngestKey("ik_live_..."),
 		// Extract trace ID from OpenTelemetry context
 		tripswitch.WithTraceIDExtractor(func(ctx context.Context) string {
