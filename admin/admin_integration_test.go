@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -89,9 +90,12 @@ func TestIntegration_BreakerCRUD(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// Use unique name to avoid conflicts with previous test runs
+	breakerName := fmt.Sprintf("integration-test-breaker-%d", time.Now().UnixNano())
+
 	// Create
 	breaker, err := client.CreateBreaker(ctx, projectID, CreateBreakerInput{
-		Name:      "integration-test-breaker",
+		Name:      breakerName,
 		Metric:    "test_metric",
 		Kind:      BreakerKindErrorRate,
 		Op:        BreakerOpGt,
@@ -109,8 +113,8 @@ func TestIntegration_BreakerCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBreaker failed: %v", err)
 	}
-	if fetched.Name != "integration-test-breaker" {
-		t.Errorf("expected name 'integration-test-breaker', got %q", fetched.Name)
+	if fetched.Name != breakerName {
+		t.Errorf("expected name %q, got %q", breakerName, fetched.Name)
 	}
 
 	// Update
@@ -124,12 +128,8 @@ func TestIntegration_BreakerCRUD(t *testing.T) {
 		t.Errorf("expected threshold 0.75, got %f", updated.Threshold)
 	}
 
-	// Get state
-	state, err := client.GetBreakerState(ctx, projectID, breaker.ID)
-	if err != nil {
-		t.Fatalf("GetBreakerState failed: %v", err)
-	}
-	t.Logf("Breaker state: %s (allow_rate: %.2f)", state.State, state.AllowRate)
+	// Note: GetBreakerState requires a project key (eb_pk_), not an admin key.
+	// State reads are runtime operations, not governance operations.
 
 	// Delete
 	err = client.DeleteBreaker(ctx, projectID, breaker.ID)

@@ -8,6 +8,8 @@ Official Go client SDK for [Tripswitch](https://tripswitch.dev) - a circuit brea
 
 > **v0.3.0 Breaking Changes:** This release introduces a two-tier authentication model. API keys are now split into project keys (`eb_pk_`) for runtime SDK usage and admin keys (`eb_admin_`) for management operations. See [Authentication](#authentication) for details.
 
+This SDK conforms to the [Tripswitch SDK Contract v0.2](https://tripswitch.dev/docs/sdk-contract).
+
 ## Features
 
 - **Real-time state sync** via Server-Sent Events (SSE)
