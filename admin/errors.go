@@ -10,6 +10,7 @@ import (
 
 // Sentinel errors for common API error cases.
 // Use errors.Is to check for these conditions.
+// These map to the canonical error taxonomy defined in the SDK Contract v0.2.
 var (
 	ErrNotFound     = errors.New("tripswitch: not found")
 	ErrUnauthorized = errors.New("tripswitch: unauthorized")
@@ -17,6 +18,8 @@ var (
 	ErrRateLimited  = errors.New("tripswitch: rate limited")
 	ErrConflict     = errors.New("tripswitch: conflict")
 	ErrValidation   = errors.New("tripswitch: validation error")
+	ErrTransport    = errors.New("tripswitch: transport failure")
+	ErrServerFault  = errors.New("tripswitch: server fault")
 )
 
 // APIError represents an error response from the Tripswitch API.
@@ -54,6 +57,10 @@ func (e *APIError) Is(target error) bool {
 		return target == ErrConflict
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
 		return target == ErrValidation
+	}
+	// 5xx status codes are server faults
+	if e.Status >= 500 && e.Status < 600 {
+		return target == ErrServerFault
 	}
 	return false
 }
@@ -114,4 +121,14 @@ func IsConflict(err error) bool {
 // IsValidation returns true if the error represents a validation error (400 or 422).
 func IsValidation(err error) bool {
 	return errors.Is(err, ErrValidation)
+}
+
+// IsTransport returns true if the error represents a transport failure (connection error, timeout, etc.).
+func IsTransport(err error) bool {
+	return errors.Is(err, ErrTransport)
+}
+
+// IsServerFault returns true if the error represents a server fault (5xx response).
+func IsServerFault(err error) bool {
+	return errors.Is(err, ErrServerFault)
 }

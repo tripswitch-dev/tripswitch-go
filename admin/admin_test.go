@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -327,6 +328,33 @@ func TestAPIError_Validation(t *testing.T) {
 	}
 }
 
+func TestAPIError_ServerFault(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Internal server error",
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(WithBaseURL(server.URL))
+
+	_, err := client.GetProject(context.Background(), "proj_123")
+	if !errors.Is(err, ErrServerFault) {
+		t.Errorf("expected ErrServerFault, got %v", err)
+	}
+}
+
+func TestAPIError_Transport(t *testing.T) {
+	// Use an invalid URL to trigger a transport error
+	client := NewClient(WithBaseURL("http://localhost:1"))
+
+	_, err := client.GetProject(context.Background(), "proj_123")
+	if !errors.Is(err, ErrTransport) {
+		t.Errorf("expected ErrTransport, got %v", err)
+	}
+}
+
 func TestRequestOptions(t *testing.T) {
 	var receivedHeaders http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -608,8 +636,14 @@ func TestErrorHelpers(t *testing.T) {
 		{&APIError{Status: 409}, IsConflict, true},
 		{&APIError{Status: 400}, IsValidation, true},
 		{&APIError{Status: 422}, IsValidation, true},
+		{&APIError{Status: 500}, IsServerFault, true},
+		{&APIError{Status: 502}, IsServerFault, true},
+		{&APIError{Status: 503}, IsServerFault, true},
 		{&APIError{Status: 500}, IsNotFound, false},
+		{fmt.Errorf("%w: connection refused", ErrTransport), IsTransport, true},
 		{errors.New("other error"), IsNotFound, false},
+		{errors.New("other error"), IsTransport, false},
+		{errors.New("other error"), IsServerFault, false},
 	}
 
 	for _, tt := range tests {

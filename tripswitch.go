@@ -328,6 +328,10 @@ func WithTraceID(traceID string) ExecuteOption {
 	}
 }
 
+// ContractVersion declares the SDK Contract version this implementation conforms to.
+// See https://app.tripswitch.dev/docs/sdk-contract.md
+const ContractVersion = "0.2"
+
 var (
 	// ErrOpen is returned by Execute when the circuit breaker is open.
 	ErrOpen = errors.New("tripswitch: breaker is open")

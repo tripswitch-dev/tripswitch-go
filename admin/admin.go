@@ -227,14 +227,14 @@ func (c *Client) do(ctx context.Context, req request, result any) error {
 	// Execute request
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("tripswitch: request failed: %w", err)
+		return fmt.Errorf("%w: %v", ErrTransport, err)
 	}
 	defer resp.Body.Close()
 
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("tripswitch: failed to read response body: %w", err)
+		return fmt.Errorf("%w: failed to read response body: %v", ErrTransport, err)
 	}
 
 	// Check for errors
