@@ -2,7 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/tripswitch-dev/tripswitch-go.svg)](https://pkg.go.dev/github.com/tripswitch-dev/tripswitch-go)
 [![Go Report Card](https://goreportcard.com/badge/github.com/tripswitch-dev/tripswitch-go)](https://goreportcard.com/report/github.com/tripswitch-dev/tripswitch-go)
-[![Version](https://img.shields.io/badge/version-v0.3.0-blue)](https://github.com/tripswitch-dev/tripswitch-go/releases/tag/v0.3.0)
+[![Version](https://img.shields.io/badge/version-v0.4.0-blue)](https://github.com/tripswitch-dev/tripswitch-go/releases/tag/v0.4.0)
 
 Official Go client SDK for [Tripswitch](https://tripswitch.dev) - a circuit breaker management service.
 
