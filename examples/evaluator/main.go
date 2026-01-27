@@ -40,12 +40,11 @@ func main() {
 		log.Fatal("tripswitch failed to initialize:", err)
 	}
 
-	// Define the breaker (get these values from your breaker config via API or dashboard)
-	breaker := tripswitch.Breaker{
-		Name:     "payment-api",                           // Breaker name (matches SSE events)
-		RouterID: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", // UUID from breaker config
-		Metric:   "error_rate",                            // Metric name from breaker config
-	}
+	// Configuration (get these values from your breaker config via API or dashboard)
+	const (
+		routerID    = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" // UUID from breaker config
+		breakerName = "payment-api"                           // Breaker name (matches SSE events)
+	)
 
 	// Custom error evaluator: only count 5xx errors as failures
 	isServerError := func(err error) bool {
@@ -60,9 +59,13 @@ func main() {
 	}
 
 	// Make API call with custom evaluator
-	result, err := tripswitch.Execute(ts, ctx, breaker, func() (string, error) {
+	result, err := tripswitch.Execute(ts, ctx, routerID, func() (string, error) {
 		return callPaymentAPI(ctx)
-	}, tripswitch.WithErrorEvaluator(isServerError))
+	},
+		tripswitch.WithBreakers(breakerName),
+		tripswitch.WithMetric("latency", tripswitch.Latency),
+		tripswitch.WithErrorEvaluator(isServerError),
+	)
 
 	if err != nil {
 		if tripswitch.IsBreakerError(err) {

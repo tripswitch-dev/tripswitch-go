@@ -27,9 +27,12 @@
 //	}
 //
 //	// Wrap operations with circuit breaker
-//	resp, err := tripswitch.Execute(ts, ctx, "external-api", func() (*http.Response, error) {
+//	resp, err := tripswitch.Execute(ts, ctx, "router-id", func() (*http.Response, error) {
 //	    return client.Do(req)
-//	})
+//	},
+//	    tripswitch.WithBreakers("external-api"),          // Gating: block if breaker is open
+//	    tripswitch.WithMetric("latency", tripswitch.Latency),  // Report latency in ms
+//	)
 //
 // # Circuit Breaker States
 //
@@ -83,14 +86,19 @@ type breakerState struct {
 	AllowRate float64 // 0.0 to 1.0
 }
 
-// Breaker identifies a circuit breaker for use with [Execute].
-// The RouterID and Metric fields are required for sample reporting.
-// The Name field is used for state lookup (must match the breaker name from SSE).
-type Breaker struct {
-	RouterID string // Routing key for samples (from breaker config)
-	Metric   string // Metric name for samples (from breaker config)
-	Name     string // Breaker name for state lookup (matches SSE events)
-}
+// latencyMarker is the unexported type for the Latency sentinel.
+// When used with WithMetric, the SDK automatically computes task duration in milliseconds.
+type latencyMarker struct{}
+
+// Latency is a sentinel value for WithMetric that instructs the SDK to
+// automatically compute and report task duration in milliseconds.
+//
+// Example:
+//
+//	tripswitch.Execute(c, ctx, "router-id", task,
+//	    tripswitch.WithMetric("latency", tripswitch.Latency),
+//	)
+var Latency = &latencyMarker{}
 
 // reportEntry represents a single sample to be reported.
 type reportEntry struct {
@@ -285,21 +293,85 @@ func WithGlobalTags(tags map[string]string) Option {
 	}
 }
 
-// executeConfig holds per-call configuration for Execute.
-type executeConfig struct {
-	ignoreErrors   []error
-	errorEvaluator func(error) bool
-	traceID        string
-	tags           map[string]string
+// executeOptions holds per-call configuration for Execute.
+type executeOptions struct {
+	breakers       []string              // Gating: breaker names to check
+	metrics        map[string]any        // Keys are metric names, values are markers/closures/primitives
+	tags           map[string]string     // Diagnostic breadcrumbs
+	ignoreErrors   []error               // Errors that don't count as failures
+	errorEvaluator func(error) bool      // Custom OK logic
+	traceID        string                // Correlation ID
+}
+
+// defaultOptions returns an executeOptions with initialized maps.
+func defaultOptions() *executeOptions {
+	return &executeOptions{
+		metrics: make(map[string]any),
+		tags:    make(map[string]string),
+	}
 }
 
 // ExecuteOption configures a single Execute call.
-type ExecuteOption func(*executeConfig)
+type ExecuteOption func(*executeOptions)
+
+// WithBreakers specifies breaker names to check before executing the task.
+// If ANY breaker is open, Execute returns ErrOpen without running the task.
+// This makes gating opt-in - if not specified, no breaker check is performed.
+func WithBreakers(names ...string) ExecuteOption {
+	return func(opts *executeOptions) {
+		opts.breakers = append(opts.breakers, names...)
+	}
+}
+
+// WithMetric adds a metric to be reported with this Execute call.
+// The value can be:
+//   - Latency: SDK computes task duration in milliseconds
+//   - func() float64: User closure called after task completes
+//   - int or float64: Static numeric value
+//
+// Multiple metrics can be added by calling WithMetric multiple times or using WithMetrics.
+// Empty keys are ignored.
+func WithMetric(key string, value any) ExecuteOption {
+	return func(opts *executeOptions) {
+		if key == "" {
+			return // Ignore empty keys
+		}
+		opts.metrics[key] = value
+	}
+}
+
+// WithMetrics adds multiple metrics to be reported with this Execute call.
+// See WithMetric for supported value types.
+func WithMetrics(metrics map[string]any) ExecuteOption {
+	return func(opts *executeOptions) {
+		for k, v := range metrics {
+			opts.metrics[k] = v
+		}
+	}
+}
+
+// WithTag adds a single diagnostic tag for this Execute call.
+// Tags are merged with global tags, with call-site tags taking precedence.
+func WithTag(key, value string) ExecuteOption {
+	return func(opts *executeOptions) {
+		opts.tags[key] = value
+	}
+}
+
+// WithTags sets diagnostic tags for this specific Execute call.
+// These are merged with global tags, with call-site tags taking precedence.
+func WithTags(tags map[string]string) ExecuteOption {
+	return func(opts *executeOptions) {
+		for k, v := range tags {
+			opts.tags[k] = v
+		}
+	}
+}
 
 // WithIgnoreErrors specifies errors that should not count as failures.
 func WithIgnoreErrors(errs ...error) ExecuteOption {
-	return func(cfg *executeConfig) {
-		cfg.ignoreErrors = errs
+	return func(opts *executeOptions) {
+		opts.ignoreErrors = errs
 	}
 }
 
@@ -307,25 +379,89 @@ func WithIgnoreErrors(errs ...error) ExecuteOption {
 // If set, this takes precedence over WithIgnoreErrors.
 // Return true if the error should count as a failure.
 func WithErrorEvaluator(f func(error) bool) ExecuteOption {
-	return func(cfg *executeConfig) {
-		cfg.errorEvaluator = f
-	}
-}
-
-// WithTags sets diagnostic tags for this specific Execute call.
-// These are merged with global tags, with call-site tags taking precedence.
-func WithTags(tags map[string]string) ExecuteOption {
-	return func(cfg *executeConfig) {
-		cfg.tags = tags
+	return func(opts *executeOptions) {
+		opts.errorEvaluator = f
 	}
 }
 
 // WithTraceID sets a specific trace ID for this Execute call.
 // This takes precedence over the client's TraceIDExtractor.
 func WithTraceID(traceID string) ExecuteOption {
-	return func(cfg *executeConfig) {
-		cfg.traceID = traceID
+	return func(opts *executeOptions) {
+		opts.traceID = traceID
 	}
+}
+
+// resolveMetrics converts the metrics map to a slice of samples.
+// It handles latency markers, closures, and numeric primitive values.
+// Closures that panic are recovered and logged, and that metric is skipped.
+//
+// Note: Map iteration order is non-deterministic, so samples may be returned
+// in any order. This is fine since samples are independent.
+func (opts *executeOptions) resolveMetrics(c *Client, duration time.Duration) []reportEntry {
+	if len(opts.metrics) == 0 {
+		return nil
+	}
+
+	samples := make([]reportEntry, 0, len(opts.metrics))
+	for key, val := range opts.metrics {
+		var resolvedValue float64
+		var skip bool
+
+		switch v := val.(type) {
+		case *latencyMarker:
+			resolvedValue = float64(duration.Milliseconds())
+		case func() float64:
+			// Recover from panics - don't let one bad closure kill all telemetry
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						c.logger.Warn("metric closure panicked", "metric", key, "panic", r)
+						skip = true
+					}
+				}()
+				resolvedValue = v()
+			}()
+		// Signed integers
+		case int:
+			resolvedValue = float64(v)
+		case int8:
+			resolvedValue = float64(v)
+		case int16:
+			resolvedValue = float64(v)
+		case int32:
+			resolvedValue = float64(v)
+		case int64:
+			resolvedValue = float64(v)
+		// Unsigned integers
+		case uint:
+			resolvedValue = float64(v)
+		case uint8:
+			resolvedValue = float64(v)
+		case uint16:
+			resolvedValue = float64(v)
+		case uint32:
+			resolvedValue = float64(v)
+		case uint64:
+			resolvedValue = float64(v)
+		// Floats
+		case float32:
+			resolvedValue = float64(v)
+		case float64:
+			resolvedValue = v
+		default:
+			c.logger.Warn("unsupported metric value type", "metric", key, "type", fmt.Sprintf("%T", val))
+			skip = true
+		}
+
+		if !skip {
+			samples = append(samples, reportEntry{
+				Metric: key,
+				Value:  resolvedValue,
+			})
+		}
+	}
+	return samples
 }
 
 // ContractVersion declares the SDK Contract version this implementation conforms to.
@@ -471,55 +607,78 @@ func (c *Client) Ready(ctx context.Context) error {
 }
 
 // Execute wraps a task with circuit breaker logic.
-// It checks the breaker state, runs the task if allowed, and reports the result.
+// It runs the task and reports samples to the specified router.
 // This is a package-level generic function because Go does not support generic methods.
 //
-// The Breaker parameter must include RouterID, Metric, and Name fields:
-//   - Name is used for state lookup (must match breaker name from SSE)
-//   - RouterID and Metric are used for sample reporting
-func Execute[T any](c *Client, ctx context.Context, b Breaker, task func() (T, error), opts ...ExecuteOption) (T, error) {
+// The routerID is the routing key for samples - it determines where data goes.
+// Use WithBreakers to optionally gate execution on breaker state.
+// Use WithMetric/WithMetrics to specify what values to report.
+//
+// Example:
+//
+//	result, err := tripswitch.Execute(c, ctx, "checkout-router", task,
+//	    tripswitch.WithBreakers("checkout-error-rate"),
+//	    tripswitch.WithMetric("latency", tripswitch.Latency),
+//	    tripswitch.WithTag("endpoint", "/checkout"),
+//	)
+func Execute[T any](c *Client, ctx context.Context, routerID string, task func() (T, error), opts ...ExecuteOption) (T, error) {
 	var zero T
 
-	// Check context first
+	// 1. Check context cancelled
 	if err := ctx.Err(); err != nil {
 		return zero, err
 	}
 
-	// Check breaker state using the breaker name
-	if !c.isAllowed(b.Name) {
-		return zero, ErrOpen
-	}
-
-	// Apply options
-	cfg := executeConfig{}
+	// 2. Apply options to executeOptions (with defaultOptions())
+	execOpts := defaultOptions()
 	for _, opt := range opts {
-		opt(&cfg)
+		opt(execOpts)
 	}
 
-	// Run task
+	// 3. If breakers specified, check each one - if ANY open, return ErrOpen
+	for _, name := range execOpts.breakers {
+		if !c.isAllowed(name) {
+			return zero, ErrOpen
+		}
+	}
+
+	// 4. Capture start time
 	startTime := time.Now()
+
+	// 5. Run task
 	result, err := task()
 
-	// Determine if this is a failure
-	ok := !c.isFailure(err, cfg)
+	// 6. Compute duration
+	duration := time.Since(startTime)
 
-	// Resolve TraceID: option > extractor > empty
-	traceID := cfg.traceID
+	// 7. Determine OK via isFailure
+	ok := !c.isFailure(err, execOpts)
+
+	// 8. Resolve TraceID: option > extractor > empty
+	traceID := execOpts.traceID
 	if traceID == "" && c.traceExtractor != nil {
 		traceID = c.traceExtractor(ctx)
 	}
 
-	// Fire-and-forget report using router_id and metric
-	c.report(reportEntry{
-		RouterID: b.RouterID,
-		Metric:   b.Metric,
-		TsMs:     startTime.UnixMilli(),
-		Value:    1.0,
-		OK:       ok,
-		TraceID:  traceID,
-		Tags:     c.mergeTags(cfg.tags),
-	})
+	// 9. Resolve metrics → []sample
+	samples := execOpts.resolveMetrics(c, duration)
 
+	// 10. Build and enqueue reportEntry per sample
+	mergedTags := c.mergeTags(execOpts.tags)
+	tsMs := startTime.UnixMilli()
+
+	for i := range samples {
+		samples[i].RouterID = routerID
+		samples[i].OK = ok
+		samples[i].TsMs = tsMs
+		samples[i].Tags = mergedTags
+		samples[i].TraceID = traceID
+
+		// 11. Enqueue samples (fire-and-forget)
+		c.report(samples[i])
+	}
+
+	// 12. Return result, err
 	return result, err
 }
 
@@ -553,19 +712,19 @@ func (c *Client) isAllowed(name string) bool {
 }
 
 // isFailure determines if an error should count as a failure.
-func (c *Client) isFailure(err error, cfg executeConfig) bool {
+func (c *Client) isFailure(err error, opts *executeOptions) bool {
 	// No error = not a failure
 	if err == nil {
 		return false
 	}
 
 	// Custom evaluator takes precedence
-	if cfg.errorEvaluator != nil {
-		return cfg.errorEvaluator(err)
+	if opts.errorEvaluator != nil {
+		return opts.errorEvaluator(err)
 	}
 
 	// Check ignore list
-	for _, ignored := range cfg.ignoreErrors {
+	for _, ignored := range opts.ignoreErrors {
 		if errors.Is(err, ignored) {
 			return false
 		}
