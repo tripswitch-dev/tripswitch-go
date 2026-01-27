@@ -2,11 +2,11 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/tripswitch-dev/tripswitch-go.svg)](https://pkg.go.dev/github.com/tripswitch-dev/tripswitch-go)
 [![Go Report Card](https://goreportcard.com/badge/github.com/tripswitch-dev/tripswitch-go)](https://goreportcard.com/report/github.com/tripswitch-dev/tripswitch-go)
-[![Version](https://img.shields.io/badge/version-v0.4.0-blue)](https://github.com/tripswitch-dev/tripswitch-go/releases/tag/v0.4.0)
+[![Version](https://img.shields.io/badge/version-v0.5.0-blue)](https://github.com/tripswitch-dev/tripswitch-go/releases/tag/v0.5.0)
 
 Official Go client SDK for [Tripswitch](https://tripswitch.dev) - a circuit breaker management service.
 
-> **v0.3.0 Breaking Changes:** This release introduces a two-tier authentication model. API keys are now split into project keys (`eb_pk_`) for runtime SDK usage and admin keys (`eb_admin_`) for management operations. See [Authentication](#authentication) for details.
+> **v0.5.0 Breaking Changes:** The `Execute` function signature has changed. The `Breaker` struct has been replaced with a `routerID` string parameter, and gating is now opt-in via `WithBreakers()`. See [Migration](#migration-to-v050) for details.
 
 This SDK conforms to the [Tripswitch SDK Contract v0.2](https://tripswitch.dev/docs/sdk-contract).
 
@@ -86,9 +86,12 @@ func main() {
     }
 
     // Wrap operations with circuit breaker
-    resp, err := tripswitch.Execute(ts, ctx, "external-api", func() (*http.Response, error) {
+    resp, err := tripswitch.Execute(ts, ctx, "my-router-id", func() (*http.Response, error) {
         return http.Get("https://api.example.com/data")
-    })
+    },
+        tripswitch.WithBreakers("external-api"),           // Gate on breaker state
+        tripswitch.WithMetric("latency", tripswitch.Latency), // Report latency
+    )
     if err != nil {
         if tripswitch.IsBreakerError(err) {
             // Circuit is open - return cached/fallback response
@@ -122,9 +125,13 @@ func main() {
 
 | Option | Description |
 |--------|-------------|
+| `WithBreakers(names...)` | Breaker names to check before executing (any open → `ErrOpen`) |
+| `WithMetric(key, value)` | Add a metric to report (`Latency` sentinel, `func() float64`, or numeric) |
+| `WithMetrics(map)` | Add multiple metrics at once |
+| `WithTag(key, value)` | Add a single diagnostic tag |
+| `WithTags(tags)` | Diagnostic tags for this specific call (merged with global tags) |
 | `WithIgnoreErrors(errs...)` | Errors that should not count as failures |
 | `WithErrorEvaluator(fn)` | Custom function to determine if error is a failure (takes precedence over `WithIgnoreErrors`) |
-| `WithTags(tags)` | Diagnostic tags for this specific call (merged with global tags) |
 | `WithTraceID(id)` | Explicit trace ID (takes precedence over `WithTraceIDExtractor`) |
 
 ## API Reference
@@ -140,12 +147,20 @@ Creates a new Tripswitch client. Automatically starts background goroutines for 
 ### Execute
 
 ```go
-func Execute[T any](c *Client, ctx context.Context, name string, task func() (T, error), opts ...ExecuteOption) (T, error)
+func Execute[T any](c *Client, ctx context.Context, routerID string, task func() (T, error), opts ...ExecuteOption) (T, error)
 ```
 
-Wraps a task with circuit breaker logic. Returns `ErrOpen` if the breaker is open or the request is throttled.
+Wraps a task with circuit breaker logic. The `routerID` is the routing key for samples. Use `WithBreakers()` to optionally gate execution on breaker state. Returns `ErrOpen` if any specified breaker is open.
 
 **Note:** This is a package-level generic function (not a method) because Go does not support generic methods.
+
+### Latency
+
+```go
+var Latency = &latencyMarker{}
+```
+
+Sentinel value for `WithMetric` that instructs the SDK to automatically compute and report task duration in milliseconds.
 
 ### Ready
 
@@ -192,7 +207,9 @@ func IsBreakerError(err error) bool
 Use `IsBreakerError` to check if an error is circuit breaker related:
 
 ```go
-result, err := tripswitch.Execute(ts, ctx, "my-breaker", task)
+result, err := tripswitch.Execute(ts, ctx, "router-id", task,
+    tripswitch.WithBreakers("my-breaker"),
+)
 if tripswitch.IsBreakerError(err) {
     // Breaker is open or request was throttled
     return fallbackValue, nil
@@ -253,6 +270,33 @@ breaker, err := client.CreateBreaker(ctx, "proj_abc123", admin.CreateBreakerInpu
 ```
 
 **Note:** Admin keys (`eb_admin_`) are for management operations only. For runtime SDK usage, use project keys (`eb_pk_`) as shown in [Quick Start](#quick-start).
+
+## Migration to v0.5.0
+
+v0.5.0 redesigns `Execute` to separate routing from gating:
+
+```go
+// Before (v0.4.0)
+breaker := tripswitch.Breaker{
+    Name:     "my-breaker",
+    RouterID: "router-id",
+    Metric:   "error_rate",
+}
+result, err := tripswitch.Execute(ts, ctx, breaker, task)
+
+// After (v0.5.0)
+result, err := tripswitch.Execute(ts, ctx, "router-id", task,
+    tripswitch.WithBreakers("my-breaker"),
+    tripswitch.WithMetric("error_rate", tripswitch.Latency),
+)
+```
+
+**Key changes:**
+- `Breaker` struct replaced with `routerID` string parameter
+- Gating is opt-in via `WithBreakers()` (omit to skip breaker checks)
+- Metrics are explicit via `WithMetric()` (supports `Latency` sentinel, closures, numeric values)
+- Multiple breakers can gate a single call (any open → `ErrOpen`)
+- Multiple metrics can be reported per call
 
 ## Contributing
 
