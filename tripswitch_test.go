@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,12 +16,19 @@ import (
 
 // mockLogger is a simple logger for testing.
 type mockLogger struct {
-	lastMsg atomic.Value // Use atomic.Value for concurrent-safe updates
+	lastMsg  atomic.Value // Use atomic.Value for concurrent-safe updates
+	warnMsgs []string     // Track all warn messages
+	mu       sync.Mutex
 }
 
 func (m *mockLogger) Debug(msg string, args ...any) { m.lastMsg.Store(msg) }
 func (m *mockLogger) Info(msg string, args ...any)  { m.lastMsg.Store(msg) }
-func (m *mockLogger) Warn(msg string, args ...any)  { m.lastMsg.Store(msg) }
+func (m *mockLogger) Warn(msg string, args ...any) {
+	m.lastMsg.Store(msg)
+	m.mu.Lock()
+	m.warnMsgs = append(m.warnMsgs, msg)
+	m.mu.Unlock()
+}
 func (m *mockLogger) Error(msg string, args ...any) { m.lastMsg.Store(msg) }
 func (m *mockLogger) LastMsg() string {
 	if v := m.lastMsg.Load(); v != nil {
@@ -28,15 +36,19 @@ func (m *mockLogger) LastMsg() string {
 	}
 	return ""
 }
-
-// testBreaker creates a Breaker for testing with the given name.
-func testBreaker(name string) Breaker {
-	return Breaker{
-		Name:     name,
-		RouterID: "test-router-id",
-		Metric:   "test-metric",
+func (m *mockLogger) HasWarn(msg string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, w := range m.warnMsgs {
+		if w == msg {
+			return true
+		}
 	}
+	return false
 }
+
+// testRouterID is a constant router ID used for testing.
+const testRouterID = "test-router-id"
 
 func TestNewClient(t *testing.T) {
 	// Start a mock SSE server
@@ -290,7 +302,8 @@ func newTestClient(t *testing.T, opts ...Option) (*Client, func()) {
 	client := NewClient("proj_test", allOpts...)
 
 	cleanup := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Close client first (cancels SSE subscription), then close server
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		client.Close(ctx)
 		server.Close()
@@ -298,14 +311,35 @@ func newTestClient(t *testing.T, opts ...Option) (*Client, func()) {
 	return client, cleanup
 }
 
+func TestExecute_NoBreakers(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// No breakers specified = pass-through (always allowed)
+	result, err := Execute(client, context.Background(), testRouterID, func() (string, error) {
+		return "success", nil
+	}, WithMetric("latency", Latency))
+
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+	if result != "success" {
+		t.Errorf("expected result 'success', got %q", result)
+	}
+}
+
 func TestExecute_ClosedBreaker(t *testing.T) {
 	client, cleanup := newTestClient(t)
 	defer cleanup()
 
-	// Breaker not in cache = fail-open (allowed)
-	result, err := Execute(client, context.Background(), testBreaker("unknown-breaker"), func() (string, error) {
+	// Set breaker to closed state
+	client.breakerStatesMu.Lock()
+	client.breakerStates["test-breaker"] = breakerState{State: "closed", AllowRate: 1.0}
+	client.breakerStatesMu.Unlock()
+
+	result, err := Execute(client, context.Background(), testRouterID, func() (string, error) {
 		return "success", nil
-	})
+	}, WithBreakers("test-breaker"), WithMetric("latency", Latency))
 
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
@@ -324,10 +358,10 @@ func TestExecute_OpenBreaker(t *testing.T) {
 	client.breakerStates["test-breaker"] = breakerState{State: "open", AllowRate: 0}
 	client.breakerStatesMu.Unlock()
 
-	result, err := Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
+	result, err := Execute(client, context.Background(), testRouterID, func() (string, error) {
 		t.Error("task should not be executed when breaker is open")
 		return "should-not-run", nil
-	})
+	}, WithBreakers("test-breaker"))
 
 	if !errors.Is(err, ErrOpen) {
 		t.Errorf("expected ErrOpen, got %v", err)
@@ -346,10 +380,10 @@ func TestExecute_HalfOpenBreaker(t *testing.T) {
 	client.breakerStates["throttled-breaker"] = breakerState{State: "half_open", AllowRate: 0}
 	client.breakerStatesMu.Unlock()
 
-	_, err := Execute(client, context.Background(), testBreaker("throttled-breaker"), func() (string, error) {
+	_, err := Execute(client, context.Background(), testRouterID, func() (string, error) {
 		t.Error("task should not be executed when throttled")
 		return "should-not-run", nil
-	})
+	}, WithBreakers("throttled-breaker"))
 
 	if !errors.Is(err, ErrOpen) {
 		t.Errorf("expected ErrOpen for throttled request, got %v", err)
@@ -360,9 +394,9 @@ func TestExecute_HalfOpenBreaker(t *testing.T) {
 	client.breakerStates["allowed-breaker"] = breakerState{State: "half_open", AllowRate: 1.0}
 	client.breakerStatesMu.Unlock()
 
-	result, err := Execute(client, context.Background(), testBreaker("allowed-breaker"), func() (string, error) {
+	result, err := Execute(client, context.Background(), testRouterID, func() (string, error) {
 		return "allowed", nil
-	})
+	}, WithBreakers("allowed-breaker"))
 
 	if err != nil {
 		t.Errorf("expected no error for allowed request, got %v", err)
@@ -379,7 +413,7 @@ func TestExecute_ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	_, err := Execute(client, ctx, testBreaker("test-breaker"), func() (string, error) {
+	_, err := Execute(client, ctx, testRouterID, func() (string, error) {
 		t.Error("task should not be executed when context is canceled")
 		return "should-not-run", nil
 	})
@@ -396,9 +430,9 @@ func TestExecute_WithIgnoreErrors(t *testing.T) {
 	errNotFound := errors.New("not found")
 
 	// Execute with ignored error - should report as OK
-	_, err := Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
+	_, err := Execute(client, context.Background(), testRouterID, func() (string, error) {
 		return "", errNotFound
-	}, WithIgnoreErrors(errNotFound))
+	}, WithMetric("count", 1), WithIgnoreErrors(errNotFound))
 
 	if !errors.Is(err, errNotFound) {
 		t.Errorf("expected errNotFound to be returned, got %v", err)
@@ -425,9 +459,9 @@ func TestExecute_WithErrorEvaluator(t *testing.T) {
 	}
 
 	// Error that evaluator says is NOT a failure
-	_, _ = Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
+	_, _ = Execute(client, context.Background(), testRouterID, func() (string, error) {
 		return "", errors.New("ok-error")
-	}, WithErrorEvaluator(evaluator))
+	}, WithMetric("count", 1), WithErrorEvaluator(evaluator))
 
 	select {
 	case entry := <-client.reportChan:
@@ -439,9 +473,9 @@ func TestExecute_WithErrorEvaluator(t *testing.T) {
 	}
 
 	// Error that evaluator says IS a failure
-	_, _ = Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
+	_, _ = Execute(client, context.Background(), testRouterID, func() (string, error) {
 		return "", errors.New("bad-error")
-	}, WithErrorEvaluator(evaluator))
+	}, WithMetric("count", 1), WithErrorEvaluator(evaluator))
 
 	select {
 	case entry := <-client.reportChan:
@@ -457,9 +491,9 @@ func TestExecute_WithTags(t *testing.T) {
 	client, cleanup := newTestClient(t, WithGlobalTags(map[string]string{"env": "test", "service": "api"}))
 	defer cleanup()
 
-	_, _ = Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
+	_, _ = Execute(client, context.Background(), testRouterID, func() (string, error) {
 		return "ok", nil
-	}, WithTags(map[string]string{"endpoint": "/users", "env": "override"}))
+	}, WithMetric("count", 1), WithTags(map[string]string{"endpoint": "/users", "env": "override"}))
 
 	select {
 	case entry := <-client.reportChan:
@@ -481,9 +515,9 @@ func TestExecute_WithTraceID(t *testing.T) {
 	client, cleanup := newTestClient(t)
 	defer cleanup()
 
-	_, _ = Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
+	_, _ = Execute(client, context.Background(), testRouterID, func() (string, error) {
 		return "ok", nil
-	}, WithTraceID("explicit-trace-123"))
+	}, WithMetric("count", 1), WithTraceID("explicit-trace-123"))
 
 	select {
 	case entry := <-client.reportChan:
@@ -502,9 +536,9 @@ func TestExecute_TraceIDFromExtractor(t *testing.T) {
 	client, cleanup := newTestClient(t, WithTraceIDExtractor(extractor))
 	defer cleanup()
 
-	_, _ = Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
+	_, _ = Execute(client, context.Background(), testRouterID, func() (string, error) {
 		return "ok", nil
-	})
+	}, WithMetric("count", 1))
 
 	select {
 	case entry := <-client.reportChan:
@@ -523,9 +557,9 @@ func TestExecute_TraceIDOptionOverridesExtractor(t *testing.T) {
 	client, cleanup := newTestClient(t, WithTraceIDExtractor(extractor))
 	defer cleanup()
 
-	_, _ = Execute(client, context.Background(), testBreaker("test-breaker"), func() (string, error) {
+	_, _ = Execute(client, context.Background(), testRouterID, func() (string, error) {
 		return "ok", nil
-	}, WithTraceID("option-trace"))
+	}, WithMetric("count", 1), WithTraceID("option-trace"))
 
 	select {
 	case entry := <-client.reportChan:
@@ -580,16 +614,16 @@ func TestIsFailure(t *testing.T) {
 	tests := []struct {
 		name     string
 		err      error
-		cfg      executeConfig
+		opts     *executeOptions
 		expected bool
 	}{
-		{"nil error", nil, executeConfig{}, false},
-		{"any error", errTest, executeConfig{}, true},
-		{"ignored error", errIgnored, executeConfig{ignoreErrors: []error{errIgnored}}, false},
-		{"non-ignored error", errTest, executeConfig{ignoreErrors: []error{errIgnored}}, true},
-		{"evaluator returns true", errTest, executeConfig{errorEvaluator: func(e error) bool { return true }}, true},
-		{"evaluator returns false", errTest, executeConfig{errorEvaluator: func(e error) bool { return false }}, false},
-		{"evaluator overrides ignore list", errIgnored, executeConfig{
+		{"nil error", nil, &executeOptions{}, false},
+		{"any error", errTest, &executeOptions{}, true},
+		{"ignored error", errIgnored, &executeOptions{ignoreErrors: []error{errIgnored}}, false},
+		{"non-ignored error", errTest, &executeOptions{ignoreErrors: []error{errIgnored}}, true},
+		{"evaluator returns true", errTest, &executeOptions{errorEvaluator: func(e error) bool { return true }}, true},
+		{"evaluator returns false", errTest, &executeOptions{errorEvaluator: func(e error) bool { return false }}, false},
+		{"evaluator overrides ignore list", errIgnored, &executeOptions{
 			ignoreErrors:   []error{errIgnored},
 			errorEvaluator: func(e error) bool { return true }, // evaluator says it's a failure
 		}, true},
@@ -597,7 +631,7 @@ func TestIsFailure(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := client.isFailure(tt.err, tt.cfg)
+			result := client.isFailure(tt.err, tt.opts)
 			if result != tt.expected {
 				t.Errorf("isFailure() = %v, expected %v", result, tt.expected)
 			}
@@ -816,5 +850,267 @@ func TestGetStatus(t *testing.T) {
 	}
 	if status.ClosedCount != 8 {
 		t.Errorf("expected 8 closed breakers, got %d", status.ClosedCount)
+	}
+}
+
+// New tests for the redesigned Execute API
+
+func TestExecute_WithLatencySentinel(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	_, _ = Execute(client, context.Background(), testRouterID, func() (string, error) {
+		// Task execution - latency will be measured
+		return "ok", nil
+	}, WithMetric("latency", Latency))
+
+	select {
+	case entry := <-client.reportChan:
+		if entry.Metric != "latency" {
+			t.Errorf("expected metric 'latency', got %q", entry.Metric)
+		}
+		// Latency should be >= 0
+		if entry.Value < 0 {
+			t.Errorf("expected latency >= 0, got %f", entry.Value)
+		}
+	default:
+		t.Error("expected a report entry")
+	}
+}
+
+func TestExecute_WithMultipleMetrics(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	_, _ = Execute(client, context.Background(), testRouterID, func() (string, error) {
+		return "ok", nil
+	},
+		WithMetric("latency", Latency),
+		WithMetric("count", 1),
+		WithMetric("amount", 99.99),
+	)
+
+	// Collect all samples
+	samples := make(map[string]float64)
+	for i := 0; i < 3; i++ {
+		select {
+		case entry := <-client.reportChan:
+			samples[entry.Metric] = entry.Value
+		default:
+			t.Error("expected 3 report entries")
+		}
+	}
+
+	if _, ok := samples["latency"]; !ok {
+		t.Error("expected latency metric")
+	}
+	if samples["count"] != 1 {
+		t.Errorf("expected count=1, got %f", samples["count"])
+	}
+	if samples["amount"] != 99.99 {
+		t.Errorf("expected amount=99.99, got %f", samples["amount"])
+	}
+}
+
+func TestExecute_WithMetricClosure(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	queueDepth := 42.0
+	_, _ = Execute(client, context.Background(), testRouterID, func() (string, error) {
+		return "ok", nil
+	}, WithMetric("queue_depth", func() float64 { return queueDepth }))
+
+	select {
+	case entry := <-client.reportChan:
+		if entry.Metric != "queue_depth" {
+			t.Errorf("expected metric 'queue_depth', got %q", entry.Metric)
+		}
+		if entry.Value != 42.0 {
+			t.Errorf("expected value 42.0, got %f", entry.Value)
+		}
+	default:
+		t.Error("expected a report entry")
+	}
+}
+
+func TestExecute_WithMetricClosurePanic(t *testing.T) {
+	logger := &mockLogger{}
+	client, cleanup := newTestClient(t, WithLogger(logger))
+	defer cleanup()
+
+	// Use two metrics: one that panics, one that doesn't
+	_, _ = Execute(client, context.Background(), testRouterID, func() (string, error) {
+		return "ok", nil
+	},
+		WithMetric("panicking", func() float64 { panic("boom") }),
+		WithMetric("safe", 1.0),
+	)
+
+	// Should still get the safe metric (panic should be recovered)
+	// Due to map iteration order randomness, we might get either metric first
+	// (the panicking one will be skipped, so we should only get "safe")
+	select {
+	case entry := <-client.reportChan:
+		if entry.Metric != "safe" {
+			t.Errorf("expected only 'safe' metric (panicking should be skipped), got %q", entry.Metric)
+		}
+	default:
+		t.Error("expected a report entry for 'safe' metric")
+	}
+
+	// Logger should have warned about the panic
+	if !logger.HasWarn("metric closure panicked") {
+		t.Errorf("expected panic warning in log, got warns: %v", logger.warnMsgs)
+	}
+}
+
+func TestExecute_UnknownBreaker_FailOpen(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Unknown breaker not in cache should fail-open (allow execution)
+	result, err := Execute(client, context.Background(), testRouterID, func() (string, error) {
+		return "success", nil
+	}, WithBreakers("unknown-breaker-not-in-cache"), WithMetric("count", 1))
+
+	if err != nil {
+		t.Errorf("expected fail-open for unknown breaker, got error: %v", err)
+	}
+	if result != "success" {
+		t.Errorf("expected result 'success', got %q", result)
+	}
+}
+
+func TestExecute_MultipleBreakers_AnyOpen(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Set one breaker closed, one open
+	client.breakerStatesMu.Lock()
+	client.breakerStates["breaker-a"] = breakerState{State: "closed", AllowRate: 1.0}
+	client.breakerStates["breaker-b"] = breakerState{State: "open", AllowRate: 0}
+	client.breakerStatesMu.Unlock()
+
+	// If ANY breaker is open, should return ErrOpen
+	_, err := Execute(client, context.Background(), testRouterID, func() (string, error) {
+		t.Error("task should not be executed when any breaker is open")
+		return "should-not-run", nil
+	}, WithBreakers("breaker-a", "breaker-b"))
+
+	if !errors.Is(err, ErrOpen) {
+		t.Errorf("expected ErrOpen when any breaker is open, got %v", err)
+	}
+}
+
+func TestExecute_MultipleBreakers_AllClosed(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Set both breakers closed
+	client.breakerStatesMu.Lock()
+	client.breakerStates["breaker-a"] = breakerState{State: "closed", AllowRate: 1.0}
+	client.breakerStates["breaker-b"] = breakerState{State: "closed", AllowRate: 1.0}
+	client.breakerStatesMu.Unlock()
+
+	result, err := Execute(client, context.Background(), testRouterID, func() (string, error) {
+		return "success", nil
+	}, WithBreakers("breaker-a", "breaker-b"), WithMetric("count", 1))
+
+	if err != nil {
+		t.Errorf("expected no error when all breakers closed, got %v", err)
+	}
+	if result != "success" {
+		t.Errorf("expected result 'success', got %q", result)
+	}
+}
+
+func TestExecute_NoMetrics_NoSamples(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Execute without any metrics - should not emit any samples
+	_, _ = Execute(client, context.Background(), testRouterID, func() (string, error) {
+		return "ok", nil
+	})
+
+	// Should be no samples in the channel
+	select {
+	case entry := <-client.reportChan:
+		t.Errorf("expected no samples when no metrics specified, got %+v", entry)
+	default:
+		// Good - no samples
+	}
+}
+
+func TestExecute_WithTag(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	_, _ = Execute(client, context.Background(), testRouterID, func() (string, error) {
+		return "ok", nil
+	},
+		WithMetric("count", 1),
+		WithTag("endpoint", "/checkout"),
+		WithTag("method", "POST"),
+	)
+
+	select {
+	case entry := <-client.reportChan:
+		if entry.Tags["endpoint"] != "/checkout" {
+			t.Errorf("expected tag endpoint='/checkout', got %q", entry.Tags["endpoint"])
+		}
+		if entry.Tags["method"] != "POST" {
+			t.Errorf("expected tag method='POST', got %q", entry.Tags["method"])
+		}
+	default:
+		t.Error("expected a report entry")
+	}
+}
+
+func TestExecute_WithMetrics_Bulk(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	_, _ = Execute(client, context.Background(), testRouterID, func() (string, error) {
+		return "ok", nil
+	}, WithMetrics(map[string]any{
+		"latency": Latency,
+		"count":   1,
+		"amount":  50.0,
+	}))
+
+	// Collect all samples
+	samples := make(map[string]float64)
+	for i := 0; i < 3; i++ {
+		select {
+		case entry := <-client.reportChan:
+			samples[entry.Metric] = entry.Value
+		default:
+			break
+		}
+	}
+
+	if len(samples) != 3 {
+		t.Errorf("expected 3 samples, got %d", len(samples))
+	}
+}
+
+func TestExecute_RouterIDInSamples(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	customRouterID := "custom-router-123"
+	_, _ = Execute(client, context.Background(), customRouterID, func() (string, error) {
+		return "ok", nil
+	}, WithMetric("count", 1))
+
+	select {
+	case entry := <-client.reportChan:
+		if entry.RouterID != customRouterID {
+			t.Errorf("expected RouterID %q, got %q", customRouterID, entry.RouterID)
+		}
+	default:
+		t.Error("expected a report entry")
 	}
 }

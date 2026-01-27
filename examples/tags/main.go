@@ -41,17 +41,13 @@ func main() {
 		log.Fatal("tripswitch failed to initialize:", err)
 	}
 
-	// Define breakers (get these values from your breaker config via API or dashboard)
-	checkoutBreaker := tripswitch.Breaker{
-		Name:     "checkout",                              // Breaker name (matches SSE events)
-		RouterID: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", // UUID from breaker config
-		Metric:   "error_rate",                            // Metric name from breaker config
-	}
-	paymentBreaker := tripswitch.Breaker{
-		Name:     "payment",                               // Breaker name (matches SSE events)
-		RouterID: "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy", // UUID from breaker config
-		Metric:   "error_rate",                            // Metric name from breaker config
-	}
+	// Configuration (get these values from your breaker config via API or dashboard)
+	const (
+		checkoutRouterID  = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" // UUID from breaker config
+		checkoutBreaker   = "checkout"                              // Breaker name (matches SSE events)
+		paymentRouterID   = "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy" // UUID from breaker config
+		paymentBreaker    = "payment"                               // Breaker name (matches SSE events)
+	)
 
 	// Simulate handling an HTTP request
 	user := &User{ID: "user_123", Tier: "enterprise"}
@@ -59,13 +55,17 @@ func main() {
 
 	// Execute with per-request tags (merged with global tags)
 	// Per-request tags override global tags on key conflict
-	result, err := tripswitch.Execute(ts, ctx, checkoutBreaker, func() (string, error) {
+	result, err := tripswitch.Execute(ts, ctx, checkoutRouterID, func() (string, error) {
 		return processCheckout(ctx, user)
-	}, tripswitch.WithTags(map[string]string{
-		"user_tier": user.Tier,
-		"user_id":   user.ID,
-		"endpoint":  endpoint,
-	}))
+	},
+		tripswitch.WithBreakers(checkoutBreaker),
+		tripswitch.WithMetric("latency", tripswitch.Latency),
+		tripswitch.WithTags(map[string]string{
+			"user_tier": user.Tier,
+			"user_id":   user.ID,
+			"endpoint":  endpoint,
+		}),
+	)
 
 	if err != nil {
 		if tripswitch.IsBreakerError(err) {
@@ -78,9 +78,11 @@ func main() {
 	fmt.Printf("Checkout complete: %s\n", result)
 
 	// You can also override the trace ID explicitly if needed
-	_, _ = tripswitch.Execute(ts, ctx, paymentBreaker, func() (bool, error) {
+	_, _ = tripswitch.Execute(ts, ctx, paymentRouterID, func() (bool, error) {
 		return processPayment(ctx)
 	},
+		tripswitch.WithBreakers(paymentBreaker),
+		tripswitch.WithMetric("latency", tripswitch.Latency),
 		tripswitch.WithTraceID("custom-trace-id-123"),
 		tripswitch.WithTags(map[string]string{
 			"payment_method": "credit_card",

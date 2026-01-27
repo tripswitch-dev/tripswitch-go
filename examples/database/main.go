@@ -38,17 +38,20 @@ func main() {
 		log.Fatal("tripswitch failed to initialize:", err)
 	}
 
-	// Define the breaker (get these values from your breaker config via API or dashboard)
-	breaker := tripswitch.Breaker{
-		Name:     "user-lookup",                           // Breaker name (matches SSE events)
-		RouterID: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", // UUID from breaker config
-		Metric:   "error_rate",                            // Metric name from breaker config
-	}
+	// Configuration (get these values from your breaker config via API or dashboard)
+	const (
+		routerID    = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" // UUID from breaker config
+		breakerName = "user-lookup"                           // Breaker name (matches SSE events)
+	)
 
 	// Look up user - sql.ErrNoRows should NOT trip the breaker
-	user, err := tripswitch.Execute(ts, ctx, breaker, func() (*User, error) {
+	user, err := tripswitch.Execute(ts, ctx, routerID, func() (*User, error) {
 		return findUserByID(ctx, 123)
-	}, tripswitch.WithIgnoreErrors(sql.ErrNoRows))
+	},
+		tripswitch.WithBreakers(breakerName),
+		tripswitch.WithMetric("latency", tripswitch.Latency),
+		tripswitch.WithIgnoreErrors(sql.ErrNoRows),
+	)
 
 	if err != nil {
 		if tripswitch.IsBreakerError(err) {

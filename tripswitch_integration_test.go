@@ -27,7 +27,9 @@ type testConfig struct {
 	ingestSecret string
 	projectID    string
 	baseURL      string
-	breaker      Breaker
+	breakerName  string
+	routerID     string
+	metricName   string
 }
 
 func skipIfNoEnv(t *testing.T) testConfig {
@@ -36,18 +38,16 @@ func skipIfNoEnv(t *testing.T) testConfig {
 		ingestSecret: os.Getenv("TRIPSWITCH_INGEST_SECRET"),
 		projectID:    os.Getenv("TRIPSWITCH_PROJECT_ID"),
 		baseURL:      os.Getenv("TRIPSWITCH_BASE_URL"),
-		breaker: Breaker{
-			Name:     os.Getenv("TRIPSWITCH_BREAKER_NAME"),
-			RouterID: os.Getenv("TRIPSWITCH_BREAKER_ROUTER_ID"),
-			Metric:   os.Getenv("TRIPSWITCH_BREAKER_METRIC"),
-		},
+		breakerName:  os.Getenv("TRIPSWITCH_BREAKER_NAME"),
+		routerID:     os.Getenv("TRIPSWITCH_BREAKER_ROUTER_ID"),
+		metricName:   os.Getenv("TRIPSWITCH_BREAKER_METRIC"),
 	}
 
 	if cfg.apiKey == "" || cfg.projectID == "" {
 		t.Skip("Skipping integration test: TRIPSWITCH_API_KEY and TRIPSWITCH_PROJECT_ID must be set")
 	}
 
-	if cfg.breaker.Name == "" || cfg.breaker.RouterID == "" || cfg.breaker.Metric == "" {
+	if cfg.breakerName == "" || cfg.routerID == "" || cfg.metricName == "" {
 		t.Skip("Skipping integration test: TRIPSWITCH_BREAKER_NAME, TRIPSWITCH_BREAKER_ROUTER_ID, and TRIPSWITCH_BREAKER_METRIC must be set")
 	}
 
@@ -98,9 +98,9 @@ func TestIntegration_Execute(t *testing.T) {
 	}
 
 	// Execute a simple task using the configured breaker
-	result, err := Execute(client, ctx, cfg.breaker, func() (string, error) {
+	result, err := Execute(client, ctx, cfg.routerID, func() (string, error) {
 		return "success", nil
-	})
+	}, WithBreakers(cfg.breakerName), WithMetric(cfg.metricName, Latency))
 
 	// The breaker might be open, closed, or not exist (fail-open)
 	if err != nil && !IsBreakerError(err) {
@@ -163,9 +163,9 @@ func TestIntegration_GracefulShutdown(t *testing.T) {
 
 	// Execute a few tasks to generate samples
 	for i := 0; i < 5; i++ {
-		Execute(client, ctx, cfg.breaker, func() (int, error) {
+		Execute(client, ctx, cfg.routerID, func() (int, error) {
 			return i, nil
-		})
+		}, WithBreakers(cfg.breakerName), WithMetric(cfg.metricName, Latency))
 	}
 
 	// Graceful shutdown should flush samples
