@@ -136,6 +136,52 @@ func main() {
 | `WithErrorEvaluator(fn)` | Custom function to determine if error is a failure (takes precedence over `WithIgnoreErrors`) |
 | `WithTraceID(id)` | Explicit trace ID (takes precedence over `WithTraceIDExtractor`) |
 
+### Error Classification
+
+Every sample includes an `ok` field indicating whether the task succeeded or failed. This is determined by the following evaluation order:
+
+1. **`WithErrorEvaluator(fn)`** — if set, takes precedence over everything else. The function signature is `func(error) bool`. Return `true` if the error **is a failure**; return `false` if it should be treated as success.
+
+   ```go
+   // Only count 5xx as failures; 4xx are "expected" errors
+   tripswitch.WithErrorEvaluator(func(err error) bool {
+       var httpErr *HTTPError
+       if errors.As(err, &httpErr) {
+           return httpErr.StatusCode >= 500
+       }
+       return true // non-HTTP errors are failures
+   })
+   ```
+
+2. **`WithIgnoreErrors(errs...)`** — if the task error matches any of these (via `errors.Is`, so wrapped errors work), it is **not** counted as a failure.
+
+   ```go
+   // sql.ErrNoRows is expected, don't count it
+   tripswitch.WithIgnoreErrors(sql.ErrNoRows)
+   ```
+
+3. **Default** — any non-nil error is a failure; nil error is success.
+
+### Trace IDs
+
+Trace IDs associate samples with distributed traces. Two ways to set them:
+
+- **`WithTraceID(id)`** — explicit per-call trace ID. Takes precedence over the extractor.
+
+- **`WithTraceIDExtractor(fn)`** (client option) — automatically extracts a trace ID from the context for every `Execute` call. Useful for OpenTelemetry integration:
+
+  ```go
+  tripswitch.WithTraceIDExtractor(func(ctx context.Context) string {
+      span := trace.SpanFromContext(ctx)
+      if span.SpanContext().IsValid() {
+          return span.SpanContext().TraceID().String()
+      }
+      return ""
+  })
+  ```
+
+If both are set, `WithTraceID` wins.
+
 ## API Reference
 
 ### NewClient
@@ -152,7 +198,7 @@ Creates a new Tripswitch client. Automatically starts background goroutines for 
 func Execute[T any](c *Client, ctx context.Context, task func() (T, error), opts ...ExecuteOption) (T, error)
 ```
 
-Wraps a task with optional circuit breaker logic and sample reporting.
+Runs a task end-to-end: checks breaker state, executes the task, and reports samples — all in one call. There is no need to call a separate report method.
 
 - Use `WithBreakers()` to gate execution on breaker state (omit for pass-through)
 - Use `WithRouter()` to specify where samples go (omit for no sample emission)
@@ -222,6 +268,40 @@ if tripswitch.IsBreakerError(err) {
     // Breaker is open or request was throttled
     return fallbackValue, nil
 }
+```
+
+## Custom Metric Values
+
+`Latency` is a convenience sentinel that auto-computes task duration in milliseconds. You can report **any metric with any value**:
+
+```go
+// Auto-computed latency (convenience)
+tripswitch.WithMetric("latency", tripswitch.Latency)
+
+// Static numeric values
+tripswitch.WithMetric("response_bytes", 4096)
+tripswitch.WithMetric("queue_depth", 42.5)
+
+// Dynamic values via closure (called after task completes)
+tripswitch.WithMetric("memory_mb", func() float64 {
+    var m runtime.MemStats
+    runtime.ReadMemStats(&m)
+    return float64(m.Alloc / 1024 / 1024)
+})
+```
+
+### Reporting Without Wrapping a Task
+
+For fire-and-forget metrics (e.g., values from a background process), use a no-op task:
+
+```go
+tripswitch.Execute(ts, ctx, func() (struct{}, error) {
+    return struct{}{}, nil
+},
+    tripswitch.WithRouter("worker-metrics"),
+    tripswitch.WithMetric("queue_depth", currentDepth),
+    tripswitch.WithMetric("processing_time_ms", elapsed),
+)
 ```
 
 ## Examples
