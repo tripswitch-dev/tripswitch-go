@@ -45,10 +45,11 @@ func main() {
 	)
 
 	// Look up user - sql.ErrNoRows should NOT trip the breaker
-	user, err := tripswitch.Execute(ts, ctx, routerID, func() (*User, error) {
+	user, err := tripswitch.Execute(ts, ctx, func() (*User, error) {
 		return findUserByID(ctx, 123)
 	},
 		tripswitch.WithBreakers(breakerName),
+		tripswitch.WithRouter(routerID),
 		tripswitch.WithMetric("latency", tripswitch.Latency),
 		tripswitch.WithIgnoreErrors(sql.ErrNoRows),
 	)

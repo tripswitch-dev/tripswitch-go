@@ -59,10 +59,11 @@ func main() {
 	}
 
 	// Make API call with custom evaluator
-	result, err := tripswitch.Execute(ts, ctx, routerID, func() (string, error) {
+	result, err := tripswitch.Execute(ts, ctx, func() (string, error) {
 		return callPaymentAPI(ctx)
 	},
 		tripswitch.WithBreakers(breakerName),
+		tripswitch.WithRouter(routerID),
 		tripswitch.WithMetric("latency", tripswitch.Latency),
 		tripswitch.WithErrorEvaluator(isServerError),
 	)

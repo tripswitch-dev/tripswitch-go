@@ -55,10 +55,11 @@ func main() {
 
 	// Execute with per-request tags (merged with global tags)
 	// Per-request tags override global tags on key conflict
-	result, err := tripswitch.Execute(ts, ctx, checkoutRouterID, func() (string, error) {
+	result, err := tripswitch.Execute(ts, ctx, func() (string, error) {
 		return processCheckout(ctx, user)
 	},
 		tripswitch.WithBreakers(checkoutBreaker),
+		tripswitch.WithRouter(checkoutRouterID),
 		tripswitch.WithMetric("latency", tripswitch.Latency),
 		tripswitch.WithTags(map[string]string{
 			"user_tier": user.Tier,
@@ -78,10 +79,11 @@ func main() {
 	fmt.Printf("Checkout complete: %s\n", result)
 
 	// You can also override the trace ID explicitly if needed
-	_, _ = tripswitch.Execute(ts, ctx, paymentRouterID, func() (bool, error) {
+	_, _ = tripswitch.Execute(ts, ctx, func() (bool, error) {
 		return processPayment(ctx)
 	},
 		tripswitch.WithBreakers(paymentBreaker),
+		tripswitch.WithRouter(paymentRouterID),
 		tripswitch.WithMetric("latency", tripswitch.Latency),
 		tripswitch.WithTraceID("custom-trace-id-123"),
 		tripswitch.WithTags(map[string]string{
