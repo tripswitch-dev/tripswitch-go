@@ -27,10 +27,11 @@
 //	}
 //
 //	// Wrap operations with circuit breaker
-//	resp, err := tripswitch.Execute(ts, ctx, "router-id", func() (*http.Response, error) {
+//	resp, err := tripswitch.Execute(ts, ctx, func() (*http.Response, error) {
 //	    return client.Do(req)
 //	},
-//	    tripswitch.WithBreakers("external-api"),          // Gating: block if breaker is open
+//	    tripswitch.WithBreakers("external-api"),               // Gating: block if breaker is open
+//	    tripswitch.WithRouter("router-id"),                    // Route samples to this router
 //	    tripswitch.WithMetric("latency", tripswitch.Latency),  // Report latency in ms
 //	)
 //
@@ -95,7 +96,8 @@ type latencyMarker struct{}
 //
 // Example:
 //
-//	tripswitch.Execute(c, ctx, "router-id", task,
+//	tripswitch.Execute(c, ctx, task,
+//	    tripswitch.WithRouter("router-id"),
 //	    tripswitch.WithMetric("latency", tripswitch.Latency),
 //	)
 var Latency = &latencyMarker{}
@@ -295,12 +297,13 @@ func WithGlobalTags(tags map[string]string) Option {
 
 // executeOptions holds per-call configuration for Execute.
 type executeOptions struct {
-	breakers       []string              // Gating: breaker names to check
-	metrics        map[string]any        // Keys are metric names, values are markers/closures/primitives
-	tags           map[string]string     // Diagnostic breadcrumbs
-	ignoreErrors   []error               // Errors that don't count as failures
-	errorEvaluator func(error) bool      // Custom OK logic
-	traceID        string                // Correlation ID
+	breakers       []string          // Gating: breaker names to check
+	routerID       string            // Router ID for sample routing
+	metrics        map[string]any    // Keys are metric names, values are markers/closures/primitives
+	tags           map[string]string // Diagnostic breadcrumbs
+	ignoreErrors   []error           // Errors that don't count as failures
+	errorEvaluator func(error) bool  // Custom OK logic
+	traceID        string            // Correlation ID
 }
 
 // defaultOptions returns an executeOptions with initialized maps.
@@ -320,6 +323,15 @@ type ExecuteOption func(*executeOptions)
 func WithBreakers(names ...string) ExecuteOption {
 	return func(opts *executeOptions) {
 		opts.breakers = append(opts.breakers, names...)
+	}
+}
+
+// WithRouter specifies the router ID for sample routing.
+// If not specified, no samples will be emitted (metrics will be silently ignored).
+// If metrics are specified but no router, a warning will be logged.
+func WithRouter(routerID string) ExecuteOption {
+	return func(opts *executeOptions) {
+		opts.routerID = routerID
 	}
 }
 
@@ -607,21 +619,22 @@ func (c *Client) Ready(ctx context.Context) error {
 }
 
 // Execute wraps a task with circuit breaker logic.
-// It runs the task and reports samples to the specified router.
+// It runs the task and optionally reports samples to a router.
 // This is a package-level generic function because Go does not support generic methods.
 //
-// The routerID is the routing key for samples - it determines where data goes.
 // Use WithBreakers to optionally gate execution on breaker state.
+// Use WithRouter to specify where samples go (required for metrics to be emitted).
 // Use WithMetric/WithMetrics to specify what values to report.
 //
 // Example:
 //
-//	result, err := tripswitch.Execute(c, ctx, "checkout-router", task,
+//	result, err := tripswitch.Execute(c, ctx, task,
 //	    tripswitch.WithBreakers("checkout-error-rate"),
+//	    tripswitch.WithRouter("checkout-router"),
 //	    tripswitch.WithMetric("latency", tripswitch.Latency),
 //	    tripswitch.WithTag("endpoint", "/checkout"),
 //	)
-func Execute[T any](c *Client, ctx context.Context, routerID string, task func() (T, error), opts ...ExecuteOption) (T, error) {
+func Execute[T any](c *Client, ctx context.Context, task func() (T, error), opts ...ExecuteOption) (T, error) {
 	var zero T
 
 	// 1. Check context cancelled
@@ -677,22 +690,28 @@ func Execute[T any](c *Client, ctx context.Context, routerID string, task func()
 		traceID = c.traceExtractor(ctx)
 	}
 
-	// 9. Resolve metrics → []sample
-	samples := execOpts.resolveMetrics(c, duration)
+	// 9. Handle metrics and samples
+	// If metrics specified but no router, log warning and skip emission
+	if len(execOpts.metrics) > 0 && execOpts.routerID == "" {
+		c.logger.Warn("metrics specified but no router - samples will not be emitted")
+	}
 
-	// 10. Build and enqueue reportEntry per sample
-	mergedTags := c.mergeTags(execOpts.tags)
-	tsMs := startTime.UnixMilli()
+	// 10. Only emit samples if router is specified
+	if execOpts.routerID != "" {
+		samples := execOpts.resolveMetrics(c, duration)
+		mergedTags := c.mergeTags(execOpts.tags)
+		tsMs := startTime.UnixMilli()
 
-	for i := range samples {
-		samples[i].RouterID = routerID
-		samples[i].OK = ok
-		samples[i].TsMs = tsMs
-		samples[i].Tags = mergedTags
-		samples[i].TraceID = traceID
+		for i := range samples {
+			samples[i].RouterID = execOpts.routerID
+			samples[i].OK = ok
+			samples[i].TsMs = tsMs
+			samples[i].Tags = mergedTags
+			samples[i].TraceID = traceID
 
-		// 11. Enqueue samples (fire-and-forget)
-		c.report(samples[i])
+			// Enqueue samples (fire-and-forget)
+			c.report(samples[i])
+		}
 	}
 
 	// 12. Return result, err

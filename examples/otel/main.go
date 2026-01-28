@@ -51,9 +51,12 @@ func main() {
 	defer span.End()
 
 	// Execute with automatic trace ID extraction
-	result, err := tripswitch.Execute(ts, ctx, "inventory-check", func() (bool, error) {
+	result, err := tripswitch.Execute(ts, ctx, func() (bool, error) {
 		return checkInventory(ctx, "SKU-12345")
-	})
+	},
+		tripswitch.WithRouter("inventory-check"),
+		tripswitch.WithMetric("latency", tripswitch.Latency),
+	)
 
 	if err != nil {
 		if tripswitch.IsBreakerError(err) {

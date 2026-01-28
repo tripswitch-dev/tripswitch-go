@@ -98,9 +98,9 @@ func TestIntegration_Execute(t *testing.T) {
 	}
 
 	// Execute a simple task using the configured breaker
-	result, err := Execute(client, ctx, cfg.routerID, func() (string, error) {
+	result, err := Execute(client, ctx, func() (string, error) {
 		return "success", nil
-	}, WithBreakers(cfg.breakerName), WithMetric(cfg.metricName, Latency))
+	}, WithBreakers(cfg.breakerName), WithRouter(cfg.routerID), WithMetric(cfg.metricName, Latency))
 
 	// The breaker might be open, closed, or not exist (fail-open)
 	if err != nil && !IsBreakerError(err) {
@@ -163,9 +163,9 @@ func TestIntegration_GracefulShutdown(t *testing.T) {
 
 	// Execute a few tasks to generate samples
 	for i := 0; i < 5; i++ {
-		Execute(client, ctx, cfg.routerID, func() (int, error) {
+		Execute(client, ctx, func() (int, error) {
 			return i, nil
-		}, WithBreakers(cfg.breakerName), WithMetric(cfg.metricName, Latency))
+		}, WithBreakers(cfg.breakerName), WithRouter(cfg.routerID), WithMetric(cfg.metricName, Latency))
 	}
 
 	// Graceful shutdown should flush samples

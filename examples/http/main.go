@@ -40,7 +40,7 @@ func main() {
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	// Wrap HTTP call with circuit breaker
-	resp, err := tripswitch.Execute(ts, ctx, routerID, func() (*http.Response, error) {
+	resp, err := tripswitch.Execute(ts, ctx, func() (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.example.com/data", nil)
 		if err != nil {
 			return nil, err
@@ -48,6 +48,7 @@ func main() {
 		return client.Do(req)
 	},
 		tripswitch.WithBreakers(breakerName),
+		tripswitch.WithRouter(routerID),
 		tripswitch.WithMetric("latency", tripswitch.Latency),
 	)
 

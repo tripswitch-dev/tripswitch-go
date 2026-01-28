@@ -45,11 +45,12 @@ func main() {
 	// Create HTTP server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/data", func(w http.ResponseWriter, r *http.Request) {
-		result, err := tripswitch.Execute(ts, r.Context(), routerID, func() (string, error) {
+		result, err := tripswitch.Execute(ts, r.Context(), func() (string, error) {
 			// Simulated work
 			return "Hello, World!", nil
 		},
 			tripswitch.WithBreakers(breakerName),
+			tripswitch.WithRouter(routerID),
 			tripswitch.WithMetric("latency", tripswitch.Latency),
 		)
 		if err != nil {
