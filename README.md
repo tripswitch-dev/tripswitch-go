@@ -224,6 +224,40 @@ if tripswitch.IsBreakerError(err) {
 }
 ```
 
+## Custom Metric Values
+
+`Latency` is a convenience sentinel that auto-computes task duration in milliseconds. You can report **any metric with any value**:
+
+```go
+// Auto-computed latency (convenience)
+tripswitch.WithMetric("latency", tripswitch.Latency)
+
+// Static numeric values
+tripswitch.WithMetric("response_bytes", 4096)
+tripswitch.WithMetric("queue_depth", 42.5)
+
+// Dynamic values via closure (called after task completes)
+tripswitch.WithMetric("memory_mb", func() float64 {
+    var m runtime.MemStats
+    runtime.ReadMemStats(&m)
+    return float64(m.Alloc / 1024 / 1024)
+})
+```
+
+### Reporting Without Wrapping a Task
+
+For fire-and-forget metrics (e.g., values from a background process), use a no-op task:
+
+```go
+tripswitch.Execute(ts, ctx, func() (struct{}, error) {
+    return struct{}{}, nil
+},
+    tripswitch.WithRouter("worker-metrics"),
+    tripswitch.WithMetric("queue_depth", currentDepth),
+    tripswitch.WithMetric("processing_time_ms", elapsed),
+)
+```
+
 ## Examples
 
 See the [examples](./examples) directory for complete, runnable examples:
