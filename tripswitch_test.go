@@ -639,31 +639,36 @@ func TestIsFailure(t *testing.T) {
 	}
 }
 
-func TestIsAllowed(t *testing.T) {
+func TestExecute_BreakerStates(t *testing.T) {
 	client, cleanup := newTestClient(t)
 	defer cleanup()
 
+	task := func() (string, error) { return "ok", nil }
+
 	// Unknown breaker - fail-open
-	if !client.isAllowed("unknown") {
-		t.Error("expected fail-open for unknown breaker")
+	_, err := Execute(client, context.Background(), testRouterID, task, WithBreakers("unknown"))
+	if err != nil {
+		t.Errorf("expected fail-open for unknown breaker, got %v", err)
 	}
 
-	// Closed breaker
+	// Closed breaker - allow
 	client.breakerStatesMu.Lock()
 	client.breakerStates["closed-breaker"] = breakerState{State: "closed", AllowRate: 0}
 	client.breakerStatesMu.Unlock()
 
-	if !client.isAllowed("closed-breaker") {
-		t.Error("expected closed breaker to allow")
+	_, err = Execute(client, context.Background(), testRouterID, task, WithBreakers("closed-breaker"))
+	if err != nil {
+		t.Errorf("expected closed breaker to allow, got %v", err)
 	}
 
-	// Open breaker
+	// Open breaker - deny
 	client.breakerStatesMu.Lock()
 	client.breakerStates["open-breaker"] = breakerState{State: "open", AllowRate: 0}
 	client.breakerStatesMu.Unlock()
 
-	if client.isAllowed("open-breaker") {
-		t.Error("expected open breaker to deny")
+	_, err = Execute(client, context.Background(), testRouterID, task, WithBreakers("open-breaker"))
+	if !errors.Is(err, ErrOpen) {
+		t.Errorf("expected open breaker to return ErrOpen, got %v", err)
 	}
 
 	// Unknown state - fail-open
@@ -671,8 +676,9 @@ func TestIsAllowed(t *testing.T) {
 	client.breakerStates["unknown-state"] = breakerState{State: "weird", AllowRate: 0}
 	client.breakerStatesMu.Unlock()
 
-	if !client.isAllowed("unknown-state") {
-		t.Error("expected fail-open for unknown state")
+	_, err = Execute(client, context.Background(), testRouterID, task, WithBreakers("unknown-state"))
+	if err != nil {
+		t.Errorf("expected fail-open for unknown state, got %v", err)
 	}
 }
 
@@ -1022,6 +1028,34 @@ func TestExecute_MultipleBreakers_AllClosed(t *testing.T) {
 	}
 	if result != "success" {
 		t.Errorf("expected result 'success', got %q", result)
+	}
+}
+
+func TestExecute_MultipleBreakers_HalfOpen_UsesMinRate(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Two half-open breakers: 20% and 50%
+	// Should use min (20%), not multiplicative (10%)
+	client.breakerStatesMu.Lock()
+	client.breakerStates["breaker-a"] = breakerState{State: "half_open", AllowRate: 0.2}
+	client.breakerStates["breaker-b"] = breakerState{State: "half_open", AllowRate: 0.5}
+	client.breakerStatesMu.Unlock()
+
+	allowed := 0
+	for i := 0; i < 10000; i++ {
+		_, err := Execute(client, context.Background(), testRouterID, func() (string, error) {
+			return "ok", nil
+		}, WithBreakers("breaker-a", "breaker-b"))
+		if err == nil {
+			allowed++
+		}
+	}
+
+	rate := float64(allowed) / 10000.0
+	// Expect ~20% (min), not ~10% (multiplicative). Allow ±3%.
+	if rate < 0.17 || rate > 0.23 {
+		t.Errorf("rate %.3f outside [0.17, 0.23]; should be ~0.20 (min), not ~0.10 (multiplicative)", rate)
 	}
 }
 

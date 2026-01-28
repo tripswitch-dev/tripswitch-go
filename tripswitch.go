@@ -635,11 +635,28 @@ func Execute[T any](c *Client, ctx context.Context, routerID string, task func()
 		opt(execOpts)
 	}
 
-	// 3. If breakers specified, check each one - if ANY open, return ErrOpen
+	// 3. If breakers specified, check using min allow_rate policy
+	minAllowRate := 1.0
+	c.breakerStatesMu.RLock()
 	for _, name := range execOpts.breakers {
-		if !c.isAllowed(name) {
-			return zero, ErrOpen
+		state, exists := c.breakerStates[name]
+		if !exists {
+			continue
 		}
+		switch state.State {
+		case "open":
+			c.breakerStatesMu.RUnlock()
+			return zero, ErrOpen
+		case "half_open":
+			if state.AllowRate < minAllowRate {
+				minAllowRate = state.AllowRate
+			}
+		}
+	}
+	c.breakerStatesMu.RUnlock()
+	if minAllowRate < 1.0 && rand.Float64() >= minAllowRate {
+		c.logger.Debug("request throttled in half-open", "minAllowRate", minAllowRate)
+		return zero, ErrOpen
 	}
 
 	// 4. Capture start time
@@ -680,35 +697,6 @@ func Execute[T any](c *Client, ctx context.Context, routerID string, task func()
 
 	// 12. Return result, err
 	return result, err
-}
-
-// isAllowed checks if a request to the named breaker should be allowed.
-func (c *Client) isAllowed(name string) bool {
-	c.breakerStatesMu.RLock()
-	state, exists := c.breakerStates[name]
-	c.breakerStatesMu.RUnlock()
-
-	// Fail-open: if breaker not in cache, allow
-	if !exists {
-		return true
-	}
-
-	switch state.State {
-	case "closed":
-		return true
-	case "open":
-		return false
-	case "half_open":
-		// Throttle via dice roll
-		allowed := rand.Float64() < state.AllowRate
-		if !allowed {
-			c.logger.Debug("request throttled in half-open", "breaker", name, "allowRate", state.AllowRate)
-		}
-		return allowed
-	default:
-		// Unknown state, fail-open
-		return true
-	}
 }
 
 // isFailure determines if an error should count as a failure.
