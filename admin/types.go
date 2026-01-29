@@ -29,6 +29,41 @@ type Project struct {
 	EnableSignedIngest  bool   `json:"enable_signed_ingest"`
 }
 
+// CreateProjectInput contains fields for creating a project.
+type CreateProjectInput struct {
+	Name string `json:"name"`
+}
+
+// ListProjectsResponse contains the response from listing projects.
+type ListProjectsResponse struct {
+	Projects []Project `json:"projects"`
+}
+
+// DeleteProjectOption configures a DeleteProject call.
+type DeleteProjectOption func(*deleteProjectConfig)
+
+type deleteProjectConfig struct {
+	confirmName    string
+	requestOptions []RequestOption
+}
+
+// WithConfirmDeleteProjectName sets the expected project name as a safety
+// guard against accidental deletion. The name must match the project's
+// actual name or the client will reject the call before it reaches the API.
+func WithConfirmDeleteProjectName(name string) DeleteProjectOption {
+	return func(cfg *deleteProjectConfig) {
+		cfg.confirmName = name
+	}
+}
+
+// WithDeleteRequestOptions forwards RequestOptions to the underlying API calls
+// made by DeleteProject (both the verification GET and the DELETE itself).
+func WithDeleteRequestOptions(opts ...RequestOption) DeleteProjectOption {
+	return func(cfg *deleteProjectConfig) {
+		cfg.requestOptions = append(cfg.requestOptions, opts...)
+	}
+}
+
 // UpdateProjectInput contains fields for updating a project.
 // Use Ptr() to set optional fields.
 type UpdateProjectInput struct {
