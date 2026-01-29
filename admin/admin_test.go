@@ -623,6 +623,130 @@ func TestWithHTTPClient(t *testing.T) {
 	}
 }
 
+func TestListProjects(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/projects" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ListProjectsResponse{
+			Projects: []Project{
+				{ID: "proj_1", Name: "project-one"},
+				{ID: "proj_2", Name: "project-two"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(WithBaseURL(server.URL))
+
+	result, err := client.ListProjects(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Projects) != 2 {
+		t.Errorf("expected 2 projects, got %d", len(result.Projects))
+	}
+}
+
+func TestCreateProject(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/projects" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+
+		var input CreateProjectInput
+		json.NewDecoder(r.Body).Decode(&input)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(Project{
+			ID:   "proj_new",
+			Name: input.Name,
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(WithBaseURL(server.URL))
+
+	project, err := client.CreateProject(context.Background(), CreateProjectInput{
+		Name: "my-project",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if project.Name != "my-project" {
+		t.Errorf("expected name 'my-project', got %q", project.Name)
+	}
+}
+
+func TestDeleteProject(t *testing.T) {
+	// Serve both GET (for name verification) and DELETE
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(Project{
+				ID:   "proj_123",
+				Name: "prod-payments",
+			})
+		case http.MethodDelete:
+			if r.URL.Path != "/v1/projects/proj_123" {
+				t.Errorf("unexpected path: %s", r.URL.Path)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected method: %s", r.Method)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(WithBaseURL(server.URL))
+
+	err := client.DeleteProject(context.Background(), "proj_123",
+		WithConfirmDeleteProjectName("prod-payments"),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDeleteProject_MissingConfirmation(t *testing.T) {
+	client := NewClient(WithBaseURL("http://localhost:1"))
+
+	err := client.DeleteProject(context.Background(), "proj_123")
+	if !errors.Is(err, ErrDeleteConfirmation) {
+		t.Errorf("expected ErrDeleteConfirmation, got %v", err)
+	}
+}
+
+func TestDeleteProject_WrongName(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(Project{
+			ID:   "proj_123",
+			Name: "prod-payments",
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(WithBaseURL(server.URL))
+
+	err := client.DeleteProject(context.Background(), "proj_123",
+		WithConfirmDeleteProjectName("wrong-name"),
+	)
+	if !errors.Is(err, ErrDeleteConfirmation) {
+		t.Errorf("expected ErrDeleteConfirmation, got %v", err)
+	}
+}
+
 func TestErrorHelpers(t *testing.T) {
 	tests := []struct {
 		err      error

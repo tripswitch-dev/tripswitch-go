@@ -54,6 +54,70 @@ func TestIntegration_GetProject(t *testing.T) {
 	t.Logf("Project: %s (%s)", project.Name, project.ID)
 }
 
+func TestIntegration_ProjectCRUD(t *testing.T) {
+	apiKey, _, baseURL := skipIfNoEnv(t)
+
+	client := NewClient(
+		WithAPIKey(apiKey),
+		WithBaseURL(baseURL),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	projectName := fmt.Sprintf("integration-test-project-%d", time.Now().UnixNano())
+
+	// Create
+	project, err := client.CreateProject(ctx, CreateProjectInput{
+		Name: projectName,
+	})
+	if err != nil {
+		t.Fatalf("CreateProject failed: %v", err)
+	}
+	t.Logf("Created project: %s (%s)", project.Name, project.ID)
+
+	// Best-effort cleanup in case the test fails before reaching Delete.
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_ = client.DeleteProject(cleanupCtx, project.ID,
+			WithConfirmDeleteProjectName(projectName),
+		)
+	})
+
+	// List
+	result, err := client.ListProjects(ctx)
+	if err != nil {
+		t.Fatalf("ListProjects failed: %v", err)
+	}
+	found := false
+	for _, p := range result.Projects {
+		if p.ID == project.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("created project %s not found in list", project.ID)
+	}
+	t.Logf("Found %d projects", len(result.Projects))
+
+	// Delete
+	err = client.DeleteProject(ctx, project.ID,
+		WithConfirmDeleteProjectName(projectName),
+	)
+	if err != nil {
+		t.Fatalf("DeleteProject failed: %v", err)
+	}
+	t.Log("Deleted project")
+
+	// Verify deletion
+	_, err = client.GetProject(ctx, project.ID)
+	if !IsNotFound(err) {
+		t.Errorf("expected NotFound error after deletion, got: %v", err)
+	}
+}
+
 func TestIntegration_ListBreakers(t *testing.T) {
 	apiKey, projectID, baseURL := skipIfNoEnv(t)
 
