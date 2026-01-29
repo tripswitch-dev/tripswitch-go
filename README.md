@@ -341,8 +341,21 @@ client := admin.NewClient(
     admin.WithAPIKey("eb_admin_..."), // From Organization Settings → Admin Keys
 )
 
+// List all projects
+projects, err := client.ListProjects(ctx)
+
+// Create a project
+project, err := client.CreateProject(ctx, admin.CreateProjectInput{
+    Name: "prod-payments",
+})
+
 // Get project details
 project, err := client.GetProject(ctx, "proj_abc123")
+
+// Delete a project (requires name confirmation as a safety guard)
+err = client.DeleteProject(ctx, "proj_abc123",
+    admin.WithConfirmDeleteProjectName("prod-payments"),
+)
 
 // List breakers
 page, err := client.ListBreakers(ctx, "proj_abc123", admin.ListParams{Limit: 100})
