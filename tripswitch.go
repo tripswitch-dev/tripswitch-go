@@ -32,7 +32,7 @@
 //	},
 //	    tripswitch.WithBreakers("external-api"),               // Gating: block if breaker is open
 //	    tripswitch.WithRouter("router-id"),                    // Route samples to this router
-//	    tripswitch.WithMetric("latency", tripswitch.Latency),  // Report latency in ms
+//	    tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
 //	)
 //
 // # Circuit Breaker States
@@ -88,17 +88,17 @@ type breakerState struct {
 }
 
 // latencyMarker is the unexported type for the Latency sentinel.
-// When used with WithMetric, the SDK automatically computes task duration in milliseconds.
+// When used with WithMetrics, the SDK automatically computes task duration in milliseconds.
 type latencyMarker struct{}
 
-// Latency is a sentinel value for WithMetric that instructs the SDK to
+// Latency is a sentinel value for WithMetrics that instructs the SDK to
 // automatically compute and report task duration in milliseconds.
 //
 // Example:
 //
 //	tripswitch.Execute(c, ctx, task,
 //	    tripswitch.WithRouter("router-id"),
-//	    tripswitch.WithMetric("latency", tripswitch.Latency),
+//	    tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
 //	)
 var Latency = &latencyMarker{}
 
@@ -335,28 +335,19 @@ func WithRouter(routerID string) ExecuteOption {
 	}
 }
 
-// WithMetric adds a metric to be reported with this Execute call.
-// The value can be:
+// WithMetrics sets the metrics to be reported with this Execute call.
+// The map keys are metric names and values can be:
 //   - Latency: SDK computes task duration in milliseconds
 //   - func() float64: User closure called after task completes
 //   - int or float64: Static numeric value
 //
-// Multiple metrics can be added by calling WithMetric multiple times or using WithMetrics.
 // Empty keys are ignored.
-func WithMetric(key string, value any) ExecuteOption {
-	return func(opts *executeOptions) {
-		if key == "" {
-			return // Ignore empty keys
-		}
-		opts.metrics[key] = value
-	}
-}
-
-// WithMetrics adds multiple metrics to be reported with this Execute call.
-// See WithMetric for supported value types.
 func WithMetrics(metrics map[string]any) ExecuteOption {
 	return func(opts *executeOptions) {
 		for k, v := range metrics {
+			if k == "" {
+				continue
+			}
 			opts.metrics[k] = v
 		}
 	}
@@ -661,14 +652,14 @@ func (c *Client) Ready(ctx context.Context) error {
 //
 // Use WithBreakers to optionally gate execution on breaker state.
 // Use WithRouter to specify where samples go (required for metrics to be emitted).
-// Use WithMetric/WithMetrics to specify what values to report.
+// Use WithMetrics to specify what values to report.
 //
 // Example:
 //
 //	result, err := tripswitch.Execute(c, ctx, task,
 //	    tripswitch.WithBreakers("checkout-error-rate"),
 //	    tripswitch.WithRouter("checkout-router"),
-//	    tripswitch.WithMetric("latency", tripswitch.Latency),
+//	    tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
 //	    tripswitch.WithTag("endpoint", "/checkout"),
 //	)
 func Execute[T any](c *Client, ctx context.Context, task func() (T, error), opts ...ExecuteOption) (T, error) {

@@ -60,7 +60,7 @@ func main() {
 	},
 		tripswitch.WithBreakers(checkoutBreaker),
 		tripswitch.WithRouter(checkoutRouterID),
-		tripswitch.WithMetric("latency", tripswitch.Latency),
+		tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
 		tripswitch.WithTags(map[string]string{
 			"user_tier": user.Tier,
 			"user_id":   user.ID,
@@ -84,7 +84,7 @@ func main() {
 	},
 		tripswitch.WithBreakers(paymentBreaker),
 		tripswitch.WithRouter(paymentRouterID),
-		tripswitch.WithMetric("latency", tripswitch.Latency),
+		tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
 		tripswitch.WithTraceID("custom-trace-id-123"),
 		tripswitch.WithTags(map[string]string{
 			"payment_method": "credit_card",

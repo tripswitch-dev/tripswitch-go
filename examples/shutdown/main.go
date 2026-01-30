@@ -51,7 +51,7 @@ func main() {
 		},
 			tripswitch.WithBreakers(breakerName),
 			tripswitch.WithRouter(routerID),
-			tripswitch.WithMetric("latency", tripswitch.Latency),
+			tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
 		)
 		if err != nil {
 			if tripswitch.IsBreakerError(err) {

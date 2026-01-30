@@ -55,7 +55,7 @@ func main() {
 		return checkInventory(ctx, "SKU-12345")
 	},
 		tripswitch.WithRouter("inventory-check"),
-		tripswitch.WithMetric("latency", tripswitch.Latency),
+		tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
 	)
 
 	if err != nil {
