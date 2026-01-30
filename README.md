@@ -91,7 +91,7 @@ func main() {
     },
         tripswitch.WithBreakers("external-api"),              // Gate on breaker state
         tripswitch.WithRouter("my-router-id"),                // Route samples to this router
-        tripswitch.WithMetric("latency", tripswitch.Latency), // Report latency
+        tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}), // Report latency
     )
     if err != nil {
         if tripswitch.IsBreakerError(err) {
@@ -128,8 +128,7 @@ func main() {
 |--------|-------------|
 | `WithBreakers(names...)` | Breaker names to check before executing (any open → `ErrOpen`). If omitted, no gating is performed. |
 | `WithRouter(routerID)` | Router ID for sample routing. If omitted, no samples are emitted. |
-| `WithMetric(key, value)` | Add a metric to report (`Latency` sentinel, `func() float64`, or numeric) |
-| `WithMetrics(map)` | Add multiple metrics at once |
+| `WithMetrics(map[string]any)` | Metrics to report (`Latency` sentinel, `func() float64`, or numeric values) |
 | `WithTag(key, value)` | Add a single diagnostic tag |
 | `WithTags(tags)` | Diagnostic tags for this specific call (merged with global tags) |
 | `WithIgnoreErrors(errs...)` | Errors that should not count as failures |
@@ -202,7 +201,7 @@ Runs a task end-to-end: checks breaker state, executes the task, and reports sam
 
 - Use `WithBreakers()` to gate execution on breaker state (omit for pass-through)
 - Use `WithRouter()` to specify where samples go (omit for no sample emission)
-- Use `WithMetric()` to specify what values to report
+- Use `WithMetrics()` to specify what values to report
 
 Returns `ErrOpen` if any specified breaker is open.
 
@@ -214,7 +213,7 @@ Returns `ErrOpen` if any specified breaker is open.
 var Latency = &latencyMarker{}
 ```
 
-Sentinel value for `WithMetric` that instructs the SDK to automatically compute and report task duration in milliseconds.
+Sentinel value for `WithMetrics` that instructs the SDK to automatically compute and report task duration in milliseconds.
 
 ### Ready
 
@@ -275,18 +274,20 @@ if tripswitch.IsBreakerError(err) {
 `Latency` is a convenience sentinel that auto-computes task duration in milliseconds. You can report **any metric with any value**:
 
 ```go
-// Auto-computed latency (convenience)
-tripswitch.WithMetric("latency", tripswitch.Latency)
+tripswitch.WithMetrics(map[string]any{
+    // Auto-computed latency (convenience)
+    "latency": tripswitch.Latency,
 
-// Static numeric values
-tripswitch.WithMetric("response_bytes", 4096)
-tripswitch.WithMetric("queue_depth", 42.5)
+    // Static numeric values
+    "response_bytes": 4096,
+    "queue_depth":    42.5,
 
-// Dynamic values via closure (called after task completes)
-tripswitch.WithMetric("memory_mb", func() float64 {
-    var m runtime.MemStats
-    runtime.ReadMemStats(&m)
-    return float64(m.Alloc / 1024 / 1024)
+    // Dynamic values via closure (called after task completes)
+    "memory_mb": func() float64 {
+        var m runtime.MemStats
+        runtime.ReadMemStats(&m)
+        return float64(m.Alloc / 1024 / 1024)
+    },
 })
 ```
 
@@ -395,14 +396,14 @@ v0.6.0 makes both breakers and router optional in the `Execute` signature:
 // Before (v0.5.0)
 result, err := tripswitch.Execute(ts, ctx, "router-id", task,
     tripswitch.WithBreakers("my-breaker"),
-    tripswitch.WithMetric("latency", tripswitch.Latency),
+    tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
 )
 
 // After (v0.6.0)
 result, err := tripswitch.Execute(ts, ctx, task,
     tripswitch.WithBreakers("my-breaker"),
     tripswitch.WithRouter("router-id"),
-    tripswitch.WithMetric("latency", tripswitch.Latency),
+    tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
 )
 ```
 
@@ -410,7 +411,7 @@ result, err := tripswitch.Execute(ts, ctx, task,
 - `routerID` parameter removed from signature, now optional via `WithRouter()`
 - No `WithBreakers()` = no gating (pass-through, task always runs)
 - No `WithRouter()` = no samples emitted (metrics silently ignored)
-- If `WithMetric()` specified but no `WithRouter()`, a warning is logged
+- If `WithMetrics()` specified but no `WithRouter()`, a warning is logged
 - Maximum flexibility: use gating only, metrics only, or both
 
 **Usage patterns:**
@@ -420,7 +421,7 @@ result, err := tripswitch.Execute(ts, ctx, task,
 tripswitch.Execute(c, ctx, task,
     tripswitch.WithBreakers("payment-gateway"),
     tripswitch.WithRouter("router-id"),
-    tripswitch.WithMetric("latency", tripswitch.Latency),
+    tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
 )
 
 // Gating only, no metrics
@@ -431,7 +432,7 @@ tripswitch.Execute(c, ctx, task,
 // Metrics only, no gating (observability without circuit breaking)
 tripswitch.Execute(c, ctx, task,
     tripswitch.WithRouter("router-id"),
-    tripswitch.WithMetric("latency", tripswitch.Latency),
+    tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
 )
 ```
 
