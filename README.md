@@ -198,7 +198,7 @@ Creates a new Tripswitch client. Automatically starts background goroutines for 
 func Execute[T any](c *Client, ctx context.Context, task func() (T, error), opts ...ExecuteOption) (T, error)
 ```
 
-Runs a task end-to-end: checks breaker state, executes the task, and reports samples — all in one call. There is no need to call a separate report method.
+Runs a task end-to-end: checks breaker state, executes the task, and reports samples — all in one call.
 
 - Use `WithBreakers()` to gate execution on breaker state (omit for pass-through)
 - Use `WithRouter()` to specify where samples go (omit for no sample emission)
@@ -290,19 +290,34 @@ tripswitch.WithMetric("memory_mb", func() float64 {
 })
 ```
 
-### Reporting Without Wrapping a Task
-
-For fire-and-forget metrics (e.g., values from a background process), use a no-op task:
+### Report
 
 ```go
-tripswitch.Execute(ts, ctx, func() (struct{}, error) {
-    return struct{}{}, nil
-},
-    tripswitch.WithRouter("worker-metrics"),
-    tripswitch.WithMetric("queue_depth", currentDepth),
-    tripswitch.WithMetric("processing_time_ms", elapsed),
-)
+func (c *Client) Report(input ReportInput)
 ```
+
+Send a sample independently of `Execute`. Use this for async workflows, result-derived metrics, or fire-and-forget reporting:
+
+```go
+// Report token usage from an LLM API response
+ts.Report(tripswitch.ReportInput{
+    RouterID: "llm-router",
+    Metric:   "total_tokens",
+    Value:    float64(resp.Usage.TotalTokens),
+    OK:       true,
+})
+
+// Background process metrics
+ts.Report(tripswitch.ReportInput{
+    RouterID: "worker-metrics",
+    Metric:   "queue_depth",
+    Value:    float64(queueLen),
+    OK:       true,
+    Tags:     map[string]string{"worker": "processor-1"},
+})
+```
+
+Samples are buffered and batched the same way as `Execute` samples. Global tags are merged automatically.
 
 ## Examples
 
