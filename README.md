@@ -2,11 +2,11 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/tripswitch-dev/tripswitch-go.svg)](https://pkg.go.dev/github.com/tripswitch-dev/tripswitch-go)
 [![Go Report Card](https://goreportcard.com/badge/github.com/tripswitch-dev/tripswitch-go)](https://goreportcard.com/report/github.com/tripswitch-dev/tripswitch-go)
-[![Version](https://img.shields.io/badge/version-v0.6.0-blue)](https://github.com/tripswitch-dev/tripswitch-go/releases/tag/v0.6.0)
+[![Version](https://img.shields.io/badge/version-v0.7.1-blue)](https://github.com/tripswitch-dev/tripswitch-go/releases/tag/v0.7.1)
 
 Official Go client SDK for [Tripswitch](https://tripswitch.dev) - a circuit breaker management service.
 
-> **v0.6.0 Breaking Changes:** The `Execute` function signature has changed. Both `routerID` and breakers are now optional via `WithRouter()` and `WithBreakers()`. See [Migration](#migration-to-v060) for details.
+> **v0.7.0 Breaking Changes:** `WithMetric(key, value)` has been removed in favor of `WithMetrics(map[string]any{...})`. See [Migration](#migration-to-v070) for details.
 
 This SDK conforms to the [Tripswitch SDK Contract v0.2](https://tripswitch.dev/docs/sdk-contract).
 
@@ -415,51 +415,27 @@ breaker, err := client.CreateBreaker(ctx, "proj_abc123", admin.CreateBreakerInpu
 
 **Note:** Admin keys (`eb_admin_`) are for management operations only. For runtime SDK usage, use project keys (`eb_pk_`) as shown in [Quick Start](#quick-start).
 
-## Migration to v0.6.0
+## Migration to v0.7.0
 
-v0.6.0 makes both breakers and router optional in the `Execute` signature:
-
-```go
-// Before (v0.5.0)
-result, err := tripswitch.Execute(ts, ctx, "router-id", task,
-    tripswitch.WithBreakers("my-breaker"),
-    tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
-)
-
-// After (v0.6.0)
-result, err := tripswitch.Execute(ts, ctx, task,
-    tripswitch.WithBreakers("my-breaker"),
-    tripswitch.WithRouter("router-id"),
-    tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
-)
-```
-
-**Key changes:**
-- `routerID` parameter removed from signature, now optional via `WithRouter()`
-- No `WithBreakers()` = no gating (pass-through, task always runs)
-- No `WithRouter()` = no samples emitted (metrics silently ignored)
-- If `WithMetrics()` specified but no `WithRouter()`, a warning is logged
-- Maximum flexibility: use gating only, metrics only, or both
-
-**Usage patterns:**
+`WithMetric` has been removed. Use `WithMetrics` with a map instead:
 
 ```go
-// Full usage - gating + metrics
+// Before (v0.6.0)
 tripswitch.Execute(c, ctx, task,
-    tripswitch.WithBreakers("payment-gateway"),
+    tripswitch.WithBreakers("my-breaker"),
     tripswitch.WithRouter("router-id"),
-    tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
+    tripswitch.WithMetric("latency", tripswitch.Latency),
+    tripswitch.WithMetric("count", 1),
 )
 
-// Gating only, no metrics
+// After (v0.7.0)
 tripswitch.Execute(c, ctx, task,
-    tripswitch.WithBreakers("payment-gateway"),
-)
-
-// Metrics only, no gating (observability without circuit breaking)
-tripswitch.Execute(c, ctx, task,
+    tripswitch.WithBreakers("my-breaker"),
     tripswitch.WithRouter("router-id"),
-    tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
+    tripswitch.WithMetrics(map[string]any{
+        "latency": tripswitch.Latency,
+        "count":   1,
+    }),
 )
 ```
 
