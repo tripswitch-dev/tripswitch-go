@@ -1223,6 +1223,141 @@ func TestExecute_GatingOnly_NoMetrics(t *testing.T) {
 	}
 }
 
+func TestReport(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	client.Report(ReportInput{
+		RouterID: "llm-router",
+		Metric:   "total_tokens",
+		Value:    1500,
+		OK:       true,
+		TraceID:  "trace_abc",
+		Tags:     map[string]string{"model": "claude"},
+	})
+
+	select {
+	case entry := <-client.reportChan:
+		if entry.RouterID != "llm-router" {
+			t.Errorf("expected RouterID 'llm-router', got %q", entry.RouterID)
+		}
+		if entry.Metric != "total_tokens" {
+			t.Errorf("expected metric 'total_tokens', got %q", entry.Metric)
+		}
+		if entry.Value != 1500 {
+			t.Errorf("expected value 1500, got %f", entry.Value)
+		}
+		if !entry.OK {
+			t.Error("expected OK to be true")
+		}
+		if entry.TraceID != "trace_abc" {
+			t.Errorf("expected TraceID 'trace_abc', got %q", entry.TraceID)
+		}
+		if entry.Tags["model"] != "claude" {
+			t.Errorf("expected tag model='claude', got %q", entry.Tags["model"])
+		}
+		if entry.TsMs == 0 {
+			t.Error("expected TsMs to be set")
+		}
+	default:
+		t.Error("expected a report entry")
+	}
+}
+
+func TestReport_MergesGlobalTags(t *testing.T) {
+	client, cleanup := newTestClient(t, WithGlobalTags(map[string]string{
+		"env": "prod",
+	}))
+	defer cleanup()
+
+	client.Report(ReportInput{
+		RouterID: "router",
+		Metric:   "count",
+		Value:    1,
+		OK:       true,
+		Tags:     map[string]string{"endpoint": "/api"},
+	})
+
+	select {
+	case entry := <-client.reportChan:
+		if entry.Tags["env"] != "prod" {
+			t.Errorf("expected global tag env='prod', got %q", entry.Tags["env"])
+		}
+		if entry.Tags["endpoint"] != "/api" {
+			t.Errorf("expected tag endpoint='/api', got %q", entry.Tags["endpoint"])
+		}
+	default:
+		t.Error("expected a report entry")
+	}
+}
+
+func TestReport_MissingRouterID(t *testing.T) {
+	logger := &mockLogger{}
+	client, cleanup := newTestClient(t, WithLogger(logger))
+	defer cleanup()
+
+	client.Report(ReportInput{
+		Metric: "count",
+		Value:  1,
+		OK:     true,
+	})
+
+	select {
+	case entry := <-client.reportChan:
+		t.Errorf("expected no sample for missing RouterID, got %+v", entry)
+	default:
+		// Good - no sample
+	}
+
+	if !logger.HasWarn("Report called with missing required fields") {
+		t.Errorf("expected warning about missing fields, got warns: %v", logger.warnMsgs)
+	}
+}
+
+func TestReport_MissingMetric(t *testing.T) {
+	logger := &mockLogger{}
+	client, cleanup := newTestClient(t, WithLogger(logger))
+	defer cleanup()
+
+	client.Report(ReportInput{
+		RouterID: "router",
+		Value:    1,
+		OK:       true,
+	})
+
+	select {
+	case entry := <-client.reportChan:
+		t.Errorf("expected no sample for missing Metric, got %+v", entry)
+	default:
+		// Good - no sample
+	}
+
+	if !logger.HasWarn("Report called with missing required fields") {
+		t.Errorf("expected warning about missing fields, got warns: %v", logger.warnMsgs)
+	}
+}
+
+func TestReport_NoTags(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	client.Report(ReportInput{
+		RouterID: "router",
+		Metric:   "count",
+		Value:    1,
+		OK:       true,
+	})
+
+	select {
+	case entry := <-client.reportChan:
+		if entry.Metric != "count" {
+			t.Errorf("expected metric 'count', got %q", entry.Metric)
+		}
+	default:
+		t.Error("expected a report entry")
+	}
+}
+
 func TestExecute_MetricsOnly_NoGating(t *testing.T) {
 	client, cleanup := newTestClient(t)
 	defer cleanup()

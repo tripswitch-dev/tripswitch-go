@@ -490,6 +490,43 @@ func IsBreakerError(err error) bool {
 	return errors.Is(err, ErrOpen)
 }
 
+// ReportInput contains fields for reporting a sample independently of Execute.
+type ReportInput struct {
+	RouterID string            // Required: router to associate the sample with
+	Metric   string            // Required: metric name
+	Value    float64           // Metric value
+	OK       bool              // Whether this sample represents a successful outcome
+	TraceID  string            // Optional: trace ID for correlation
+	Tags     map[string]string // Optional: per-sample tags (merged with global tags)
+}
+
+// Report sends a sample to the report buffer.
+// Use this for async workflows, result-derived metrics, or fire-and-forget
+// reporting where Execute's synchronous wrap-and-report model doesn't fit.
+//
+//	ts.Report(tripswitch.ReportInput{
+//	    RouterID: "llm-router",
+//	    Metric:   "total_tokens",
+//	    Value:    float64(resp.Usage.TotalTokens),
+//	    OK:       true,
+//	})
+func (c *Client) Report(input ReportInput) {
+	if input.RouterID == "" || input.Metric == "" {
+		c.logger.Warn("Report called with missing required fields", "router_id", input.RouterID, "metric", input.Metric)
+		return
+	}
+
+	c.report(reportEntry{
+		RouterID: input.RouterID,
+		Metric:   input.Metric,
+		Value:    input.Value,
+		OK:       input.OK,
+		TsMs:     time.Now().UnixMilli(),
+		Tags:     c.mergeTags(input.Tags),
+		TraceID:  input.TraceID,
+	})
+}
+
 // Close gracefully shuts down the client, flushing any buffered samples.
 // The provided context controls how long to wait for the flush to complete.
 func (c *Client) Close(ctx context.Context) error {
