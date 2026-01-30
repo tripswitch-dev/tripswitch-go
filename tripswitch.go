@@ -297,13 +297,14 @@ func WithGlobalTags(tags map[string]string) Option {
 
 // executeOptions holds per-call configuration for Execute.
 type executeOptions struct {
-	breakers       []string          // Gating: breaker names to check
-	routerID       string            // Router ID for sample routing
-	metrics        map[string]any    // Keys are metric names, values are markers/closures/primitives
-	tags           map[string]string // Diagnostic breadcrumbs
-	ignoreErrors   []error           // Errors that don't count as failures
-	errorEvaluator func(error) bool  // Custom OK logic
-	traceID        string            // Correlation ID
+	breakers        []string          // Gating: breaker names to check
+	routerID        string            // Router ID for sample routing
+	metrics         map[string]any    // Keys are metric names, values are markers/closures/primitives
+	deferredMetrics any               // func(T, error) map[string]float64, type-asserted in Execute
+	tags            map[string]string // Diagnostic breadcrumbs
+	ignoreErrors    []error           // Errors that don't count as failures
+	errorEvaluator  func(error) bool  // Custom OK logic
+	traceID         string            // Correlation ID
 }
 
 // defaultOptions returns an executeOptions with initialized maps.
@@ -350,6 +351,37 @@ func WithMetrics(metrics map[string]any) ExecuteOption {
 			}
 			opts.metrics[k] = v
 		}
+	}
+}
+
+// WithDeferredMetrics registers a function that extracts metrics from the
+// task's return value after execution. The function receives the result and
+// error from the task and returns a map of metric names to values.
+// Only one deferred function is supported per Execute call; if called
+// multiple times, the last one wins.
+//
+// This is useful for reporting values that are only available in the response,
+// such as token counts from LLM APIs:
+//
+//	result, err := tripswitch.Execute(ts, ctx, func() (*Response, error) {
+//	    return anthropic.Complete(ctx, req)
+//	},
+//	    tripswitch.WithRouter("llm-router"),
+//	    tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
+//	    tripswitch.WithDeferredMetrics(func(res *Response, err error) map[string]float64 {
+//	        if res == nil {
+//	            return nil
+//	        }
+//	        return map[string]float64{
+//	            "prompt_tokens":     float64(res.Usage.PromptTokens),
+//	            "completion_tokens": float64(res.Usage.CompletionTokens),
+//	            "total_tokens":      float64(res.Usage.TotalTokens),
+//	        }
+//	    }),
+//	)
+func WithDeferredMetrics[T any](fn func(T, error) map[string]float64) ExecuteOption {
+	return func(opts *executeOptions) {
+		opts.deferredMetrics = fn
 	}
 }
 
@@ -653,6 +685,7 @@ func (c *Client) Ready(ctx context.Context) error {
 // Use WithBreakers to optionally gate execution on breaker state.
 // Use WithRouter to specify where samples go (required for metrics to be emitted).
 // Use WithMetrics to specify what values to report.
+// Use WithDeferredMetrics to extract metrics from the task's return value.
 //
 // Example:
 //
@@ -719,14 +752,38 @@ func Execute[T any](c *Client, ctx context.Context, task func() (T, error), opts
 	}
 
 	// 9. Handle metrics and samples
+	hasMetrics := len(execOpts.metrics) > 0 || execOpts.deferredMetrics != nil
 	// If metrics specified but no router, log warning and skip emission
-	if len(execOpts.metrics) > 0 && execOpts.routerID == "" {
+	if hasMetrics && execOpts.routerID == "" {
 		c.logger.Warn("metrics specified but no router - samples will not be emitted")
 	}
 
 	// 10. Only emit samples if router is specified
 	if execOpts.routerID != "" {
 		samples := execOpts.resolveMetrics(c, duration)
+
+		// Resolve deferred metrics from task result
+		if execOpts.deferredMetrics != nil {
+			if fn, ok2 := execOpts.deferredMetrics.(func(T, error) map[string]float64); ok2 {
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							c.logger.Warn("deferred metrics function panicked", "error", fmt.Sprintf("%v", r))
+						}
+					}()
+					for k, v := range fn(result, err) {
+						if k == "" {
+							continue
+						}
+						samples = append(samples, reportEntry{
+							Metric: k,
+							Value:  v,
+						})
+					}
+				}()
+			}
+		}
+
 		mergedTags := c.mergeTags(execOpts.tags)
 		tsMs := startTime.UnixMilli()
 
