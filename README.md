@@ -129,6 +129,7 @@ func main() {
 | `WithBreakers(names...)` | Breaker names to check before executing (any open → `ErrOpen`). If omitted, no gating is performed. |
 | `WithRouter(routerID)` | Router ID for sample routing. If omitted, no samples are emitted. |
 | `WithMetrics(map[string]any)` | Metrics to report (`Latency` sentinel, `func() float64`, or numeric values) |
+| `WithDeferredMetrics(fn)` | Extract metrics from the task's return value (e.g., token counts from API responses) |
 | `WithTag(key, value)` | Add a single diagnostic tag |
 | `WithTags(tags)` | Diagnostic tags for this specific call (merged with global tags) |
 | `WithIgnoreErrors(errs...)` | Errors that should not count as failures |
@@ -290,6 +291,32 @@ tripswitch.WithMetrics(map[string]any{
     },
 })
 ```
+
+### Deferred Metrics
+
+Use `WithDeferredMetrics` to extract metrics from the task's return value — useful when the interesting values are in the response (e.g., token counts from LLM APIs):
+
+```go
+result, err := tripswitch.Execute(ts, ctx, func() (*anthropic.Response, error) {
+    return anthropic.Complete(ctx, req)
+},
+    tripswitch.WithBreakers("anthropic-spend"),
+    tripswitch.WithRouter("llm-router"),
+    tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
+    tripswitch.WithDeferredMetrics(func(res *anthropic.Response, err error) map[string]float64 {
+        if res == nil {
+            return nil
+        }
+        return map[string]float64{
+            "prompt_tokens":     float64(res.Usage.PromptTokens),
+            "completion_tokens": float64(res.Usage.CompletionTokens),
+            "total_tokens":      float64(res.Usage.TotalTokens),
+        }
+    }),
+)
+```
+
+Deferred metrics are resolved after the task completes and merged with eager metrics into the same sample batch. If the function panics, it is recovered and a warning is logged — eager metrics are still emitted.
 
 ### Report
 

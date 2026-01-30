@@ -468,7 +468,7 @@ func TestExecute_WithErrorEvaluator(t *testing.T) {
 		if !entry.OK {
 			t.Error("expected evaluator to mark 'ok-error' as OK")
 		}
-	default:
+	case <-time.After(time.Second):
 		t.Error("expected a report entry")
 	}
 
@@ -482,7 +482,7 @@ func TestExecute_WithErrorEvaluator(t *testing.T) {
 		if entry.OK {
 			t.Error("expected evaluator to mark 'bad-error' as failure")
 		}
-	default:
+	case <-time.After(time.Second):
 		t.Error("expected a report entry")
 	}
 }
@@ -1389,5 +1389,125 @@ func TestExecute_MetricsOnly_NoGating(t *testing.T) {
 		}
 	default:
 		t.Error("expected a report entry for metrics-only use case")
+	}
+}
+
+type mockLLMResponse struct {
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+}
+
+func TestExecute_WithDeferredMetrics(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	resp := &mockLLMResponse{
+		PromptTokens:     100,
+		CompletionTokens: 200,
+		TotalTokens:      300,
+	}
+
+	result, err := Execute(client, context.Background(), func() (*mockLLMResponse, error) {
+		return resp, nil
+	},
+		WithRouter(testRouterID),
+		WithMetrics(map[string]any{"latency": Latency}),
+		WithDeferredMetrics(func(res *mockLLMResponse, err error) map[string]float64 {
+			if res == nil {
+				return nil
+			}
+			return map[string]float64{
+				"prompt_tokens":     float64(res.PromptTokens),
+				"completion_tokens": float64(res.CompletionTokens),
+				"total_tokens":      float64(res.TotalTokens),
+			}
+		}),
+	)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.TotalTokens != 300 {
+		t.Errorf("expected TotalTokens 300, got %d", result.TotalTokens)
+	}
+
+	// Collect all samples (1 latency + 3 deferred)
+	samples := make(map[string]float64)
+	for i := 0; i < 4; i++ {
+		select {
+		case entry := <-client.reportChan:
+			samples[entry.Metric] = entry.Value
+		default:
+			break
+		}
+	}
+
+	if len(samples) != 4 {
+		t.Errorf("expected 4 samples, got %d: %v", len(samples), samples)
+	}
+	if samples["prompt_tokens"] != 100 {
+		t.Errorf("expected prompt_tokens=100, got %f", samples["prompt_tokens"])
+	}
+	if samples["completion_tokens"] != 200 {
+		t.Errorf("expected completion_tokens=200, got %f", samples["completion_tokens"])
+	}
+	if samples["total_tokens"] != 300 {
+		t.Errorf("expected total_tokens=300, got %f", samples["total_tokens"])
+	}
+}
+
+func TestExecute_WithDeferredMetrics_NilResult(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	_, _ = Execute(client, context.Background(), func() (*mockLLMResponse, error) {
+		return nil, fmt.Errorf("api error")
+	},
+		WithRouter(testRouterID),
+		WithDeferredMetrics(func(res *mockLLMResponse, err error) map[string]float64 {
+			if res == nil {
+				return nil
+			}
+			return map[string]float64{"total_tokens": float64(res.TotalTokens)}
+		}),
+	)
+
+	// Should have no samples (no eager metrics, deferred returned nil)
+	select {
+	case entry := <-client.reportChan:
+		t.Errorf("expected no samples, got %+v", entry)
+	default:
+		// Good
+	}
+}
+
+func TestExecute_WithDeferredMetrics_Panic(t *testing.T) {
+	logger := &mockLogger{}
+	client, cleanup := newTestClient(t, WithLogger(logger))
+	defer cleanup()
+
+	_, _ = Execute(client, context.Background(), func() (string, error) {
+		return "ok", nil
+	},
+		WithRouter(testRouterID),
+		WithMetrics(map[string]any{"count": 1}),
+		WithDeferredMetrics(func(res string, err error) map[string]float64 {
+			panic("boom")
+		}),
+	)
+
+	// The eager metric should still be emitted
+	select {
+	case entry := <-client.reportChan:
+		if entry.Metric != "count" {
+			t.Errorf("expected metric 'count', got %q", entry.Metric)
+		}
+	case <-time.After(time.Second):
+		t.Error("expected eager metric to still be emitted after deferred panic")
+	}
+
+	if !logger.HasWarn("deferred metrics function panicked") {
+		t.Errorf("expected panic warning, got warns: %v", logger.warnMsgs)
 	}
 }
