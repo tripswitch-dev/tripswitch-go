@@ -80,7 +80,7 @@ func TestListBreakersMetadata(t *testing.T) {
 	}
 }
 
-func TestListBreakersMetadata_ETag(t *testing.T) {
+func TestListBreakersMetadata_IfNoneMatchHeader(t *testing.T) {
 	target := "/v1/projects/proj_123/breakers/metadata"
 	server := metadataTestServer(t, target, func(w http.ResponseWriter, r *http.Request) {
 		if inm := r.Header.Get("If-None-Match"); inm != `"abc123"` {
@@ -179,5 +179,34 @@ func TestListRoutersMetadata(t *testing.T) {
 	}
 	if routers[0].Metadata["region"] != "us-east" {
 		t.Errorf("expected region=us-east, got %q", routers[0].Metadata["region"])
+	}
+}
+
+func TestListRoutersMetadata_NotModified(t *testing.T) {
+	target := "/v1/projects/proj_123/routers/metadata"
+	server := metadataTestServer(t, target, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotModified)
+	})
+	defer server.Close()
+
+	ts := NewClient("proj_123",
+		WithAPIKey("eb_pk_test"),
+		WithBaseURL(server.URL),
+	)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		ts.Close(ctx)
+	}()
+
+	routers, etag, err := ts.ListRoutersMetadata(context.Background(), `"rtr456"`)
+	if !errors.Is(err, ErrNotModified) {
+		t.Fatalf("expected ErrNotModified, got %v", err)
+	}
+	if routers != nil {
+		t.Errorf("expected nil routers, got %v", routers)
+	}
+	if etag != `"rtr456"` {
+		t.Errorf("expected etag returned back, got %q", etag)
 	}
 }
