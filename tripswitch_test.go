@@ -938,7 +938,7 @@ func TestExecute_WithMetricsClosure(t *testing.T) {
 		if entry.Value != 42.0 {
 			t.Errorf("expected value 42.0, got %f", entry.Value)
 		}
-	default:
+	case <-time.After(2 * time.Second):
 		t.Error("expected a report entry")
 	}
 }
