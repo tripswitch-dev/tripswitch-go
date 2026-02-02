@@ -777,3 +777,165 @@ func TestErrorHelpers(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateBreakerWithMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input CreateBreakerInput
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
+		}
+		if input.Metadata["region"] != "us-east-1" {
+			t.Errorf("expected metadata region 'us-east-1', got %q", input.Metadata["region"])
+		}
+		if input.Metadata["team"] != "payments" {
+			t.Errorf("expected metadata team 'payments', got %q", input.Metadata["team"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{
+			"breaker": Breaker{
+				ID:       "breaker_456",
+				Name:     input.Name,
+				Kind:     input.Kind,
+				Metadata: input.Metadata,
+			},
+			"router_id": "router_789",
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(WithBaseURL(server.URL))
+
+	breaker, err := client.CreateBreaker(context.Background(), "proj_123", CreateBreakerInput{
+		Name:      "api-latency",
+		Metric:    "latency_ms",
+		Kind:      BreakerKindP95,
+		Op:        BreakerOpGt,
+		Threshold: 500,
+		Metadata:  map[string]string{"region": "us-east-1", "team": "payments"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if breaker.Metadata["region"] != "us-east-1" {
+		t.Errorf("expected metadata region 'us-east-1', got %q", breaker.Metadata["region"])
+	}
+	if breaker.Metadata["team"] != "payments" {
+		t.Errorf("expected metadata team 'payments', got %q", breaker.Metadata["team"])
+	}
+}
+
+func TestCreateRouterWithMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input CreateRouterInput
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
+		}
+		if input.Metadata["env"] != "production" {
+			t.Errorf("expected metadata env 'production', got %q", input.Metadata["env"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(Router{
+			ID:       "router_789",
+			Name:     input.Name,
+			Mode:     input.Mode,
+			Metadata: input.Metadata,
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(WithBaseURL(server.URL))
+
+	router, err := client.CreateRouter(context.Background(), "proj_123", CreateRouterInput{
+		Name:     "prod-router",
+		Mode:     RouterModeStatic,
+		Metadata: map[string]string{"env": "production"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if router.Metadata["env"] != "production" {
+		t.Errorf("expected metadata env 'production', got %q", router.Metadata["env"])
+	}
+}
+
+func TestUpdateBreakerWithMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Errorf("expected PATCH, got %s", r.Method)
+		}
+
+		var input UpdateBreakerInput
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
+		}
+		if input.Metadata["region"] != "eu-west-1" {
+			t.Errorf("expected metadata region 'eu-west-1', got %q", input.Metadata["region"])
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"breaker": Breaker{
+				ID:       "breaker_456",
+				Name:     "api-latency",
+				Metadata: input.Metadata,
+			},
+			"router_id": "router_789",
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(WithBaseURL(server.URL))
+
+	breaker, err := client.UpdateBreaker(context.Background(), "proj_123", "breaker_456", UpdateBreakerInput{
+		Metadata: map[string]string{"region": "eu-west-1"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if breaker.Metadata["region"] != "eu-west-1" {
+		t.Errorf("expected metadata region 'eu-west-1', got %q", breaker.Metadata["region"])
+	}
+}
+
+func TestCreateBreakerWithNilMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
+		}
+		if _, exists := raw["metadata"]; exists {
+			t.Error("expected metadata to be omitted from request body")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{
+			"breaker": Breaker{
+				ID:   "breaker_456",
+				Name: "api-latency",
+			},
+			"router_id": "router_789",
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(WithBaseURL(server.URL))
+
+	breaker, err := client.CreateBreaker(context.Background(), "proj_123", CreateBreakerInput{
+		Name:      "api-latency",
+		Metric:    "latency_ms",
+		Kind:      BreakerKindP95,
+		Op:        BreakerOpGt,
+		Threshold: 500,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if breaker.Metadata != nil {
+		t.Errorf("expected nil metadata, got %v", breaker.Metadata)
+	}
+}

@@ -129,6 +129,7 @@ type Breaker struct {
 	MinStateDurationMs int               `json:"min_state_duration_ms,omitempty"`
 	CooldownMs         int               `json:"cooldown_ms,omitempty"`
 	Actions            map[string]any    `json:"actions,omitempty"`
+	Metadata           map[string]string `json:"metadata,omitempty"`
 }
 
 // CreateBreakerInput contains fields for creating a breaker.
@@ -144,6 +145,7 @@ type CreateBreakerInput struct {
 	MinStateDurationMs int            `json:"min_state_duration_ms,omitempty"`
 	CooldownMs         int            `json:"cooldown_ms,omitempty"`
 	Actions            map[string]any `json:"actions,omitempty"`
+	Metadata           map[string]string `json:"metadata,omitempty"`
 }
 
 // UpdateBreakerInput contains fields for updating a breaker.
@@ -160,6 +162,7 @@ type UpdateBreakerInput struct {
 	MinStateDurationMs *int            `json:"min_state_duration_ms,omitempty"`
 	CooldownMs         *int            `json:"cooldown_ms,omitempty"`
 	Actions            map[string]any  `json:"actions,omitempty"`
+	Metadata           map[string]string `json:"metadata,omitempty"`
 }
 
 // SyncBreakersInput contains a list of breakers for bulk sync.
@@ -208,6 +211,7 @@ type Router struct {
 	Breakers     []Breaker  `json:"breakers,omitempty"`
 	InsertedAt   time.Time  `json:"inserted_at,omitempty"`
 	CreatedBy    string     `json:"created_by,omitempty"`
+	Metadata     map[string]string `json:"metadata,omitempty"`
 }
 
 // ListRoutersResponse contains the response from listing routers.
@@ -221,6 +225,7 @@ type CreateRouterInput struct {
 	Description string     `json:"description,omitempty"`
 	Mode        RouterMode `json:"mode"`
 	Enabled     bool       `json:"enabled,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 // UpdateRouterInput contains fields for updating a router.
@@ -230,6 +235,7 @@ type UpdateRouterInput struct {
 	Description *string     `json:"description,omitempty"`
 	Mode        *RouterMode `json:"mode,omitempty"`
 	Enabled     *bool       `json:"enabled,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 // LinkBreakerInput contains parameters for linking a breaker to a router.
