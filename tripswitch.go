@@ -158,6 +158,15 @@ type Client struct {
 	reportChan     chan reportEntry
 	droppedSamples uint64 // atomic counter for dropped samples
 	httpClient     *http.Client
+
+	// metadata cache
+	metaMu           sync.RWMutex
+	breakersMeta     []BreakerMeta
+	routersMeta      []RouterMeta
+	breakersETag     string
+	routersETag      string
+	metaSyncInterval time.Duration
+	metaSyncDisabled bool
 }
 
 // Option is a functional option for configuring the client.
@@ -175,6 +184,7 @@ func NewClient(projectID string, opts ...Option) *Client {
 		sseReady:      make(chan struct{}),
 		reportChan:    make(chan reportEntry, 10000),
 		httpClient:    &http.Client{Timeout: 30 * time.Second},
+		metaSyncInterval: 30 * time.Second,
 	}
 
 	for _, opt := range opts {
@@ -186,6 +196,10 @@ func NewClient(projectID string, opts ...Option) *Client {
 
 	go c.startSSEListener()
 	go c.startFlusher()
+	if !c.metaSyncDisabled {
+		c.wg.Add(1)
+		go c.startMetadataSync()
+	}
 
 	return c
 }
@@ -279,6 +293,26 @@ func WithOnStateChange(f func(name, from, to string)) Option {
 func WithTraceIDExtractor(f func(ctx context.Context) string) Option {
 	return func(c *Client) {
 		c.traceExtractor = f
+	}
+}
+
+// WithMetadataSyncInterval sets the interval for refreshing breaker and router
+// metadata from the API. Defaults to 30 seconds. A value <= 0 disables sync.
+func WithMetadataSyncInterval(d time.Duration) Option {
+	return func(c *Client) {
+		if d <= 0 {
+			c.metaSyncDisabled = true
+			return
+		}
+		c.metaSyncInterval = d
+	}
+}
+
+// withMetadataSyncDisabled disables the background metadata sync goroutine.
+// This is intended for tests that don't need metadata sync.
+func withMetadataSyncDisabled() Option {
+	return func(c *Client) {
+		c.metaSyncDisabled = true
 	}
 }
 

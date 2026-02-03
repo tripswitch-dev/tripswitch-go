@@ -81,6 +81,7 @@ func TestNewClient(t *testing.T) {
 		WithGlobalTags(tags),
 		WithTraceIDExtractor(extractor),
 		WithOnStateChange(func(name, from, to string) {}),
+		withMetadataSyncDisabled(),
 	)
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -117,7 +118,7 @@ func TestNewClient(t *testing.T) {
 	}
 
 	// Test default values with mock server
-	tsDefault := NewClient("proj_456", WithBaseURL(server.URL))
+	tsDefault := NewClient("proj_456", WithBaseURL(server.URL), withMetadataSyncDisabled())
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -154,7 +155,7 @@ func TestClose(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ts := NewClient("proj_abc", WithBaseURL(server.URL))
+	ts := NewClient("proj_abc", WithBaseURL(server.URL), withMetadataSyncDisabled())
 
 	// Wait for SSE connection to be established before closing
 	// This avoids race condition where Close() is called while SSE is still connecting
@@ -192,7 +193,7 @@ func TestStats(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ts := NewClient("proj_abc", WithBaseURL(server.URL))
+	ts := NewClient("proj_abc", WithBaseURL(server.URL), withMetadataSyncDisabled())
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -256,7 +257,7 @@ func TestReady(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient("proj_test", WithBaseURL(ts.URL))
+	client := NewClient("proj_test", WithBaseURL(ts.URL), withMetadataSyncDisabled())
 	defer func() {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer closeCancel()
@@ -298,7 +299,7 @@ func newTestClient(t *testing.T, opts ...Option) (*Client, func()) {
 		<-r.Context().Done()
 	}))
 
-	allOpts := append([]Option{WithBaseURL(server.URL)}, opts...)
+	allOpts := append([]Option{WithBaseURL(server.URL), withMetadataSyncDisabled()}, opts...)
 	client := NewClient("proj_test", allOpts...)
 
 	cleanup := func() {
@@ -731,7 +732,7 @@ func TestSendBatch_PayloadFormat(t *testing.T) {
 
 	// Use a valid 64-char hex string for the ingest secret
 	ingestSecret := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	client := NewClient("proj_test", WithBaseURL(server.URL), WithIngestSecret(ingestSecret))
+	client := NewClient("proj_test", WithBaseURL(server.URL), WithIngestSecret(ingestSecret), withMetadataSyncDisabled())
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -837,6 +838,7 @@ func TestGetStatus(t *testing.T) {
 	client := NewClient("proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
+		withMetadataSyncDisabled(),
 	)
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
