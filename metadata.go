@@ -11,6 +11,9 @@ import (
 // ErrNotModified is returned when the server responds with 304 Not Modified.
 var ErrNotModified = errors.New("tripswitch: not modified")
 
+// ErrUnauthorized is returned when the server responds with 401 or 403.
+var ErrUnauthorized = errors.New("tripswitch: unauthorized")
+
 // BreakerMeta contains a breaker's identity and metadata.
 type BreakerMeta struct {
 	ID       string            `json:"id"`
@@ -62,6 +65,10 @@ func (c *Client) ListBreakersMetadata(ctx context.Context, etag string) ([]Break
 		return nil, etag, ErrNotModified
 	}
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, "", ErrUnauthorized
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, "", fmt.Errorf("tripswitch: unexpected status code: %d", resp.StatusCode)
 	}
@@ -101,6 +108,10 @@ func (c *Client) ListRoutersMetadata(ctx context.Context, etag string) ([]Router
 
 	if resp.StatusCode == http.StatusNotModified {
 		return nil, etag, ErrNotModified
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, "", ErrUnauthorized
 	}
 
 	if resp.StatusCode != http.StatusOK {

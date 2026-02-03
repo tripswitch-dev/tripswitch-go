@@ -33,6 +33,18 @@ type testConfig struct {
 }
 
 func skipIfNoEnv(t *testing.T) testConfig {
+	cfg := loadTestConfig(t)
+
+	if cfg.breakerName == "" || cfg.routerID == "" || cfg.metricName == "" {
+		t.Skip("Skipping integration test: TRIPSWITCH_BREAKER_NAME, TRIPSWITCH_BREAKER_ROUTER_ID, and TRIPSWITCH_BREAKER_METRIC must be set")
+	}
+
+	return cfg
+}
+
+// loadTestConfig loads config from env vars, skipping if basic connection info is missing.
+// Use this for tests that don't need breaker/router config (e.g., metadata sync).
+func loadTestConfig(t *testing.T) testConfig {
 	cfg := testConfig{
 		apiKey:       os.Getenv("TRIPSWITCH_API_KEY"),
 		ingestSecret: os.Getenv("TRIPSWITCH_INGEST_SECRET"),
@@ -45,10 +57,6 @@ func skipIfNoEnv(t *testing.T) testConfig {
 
 	if cfg.apiKey == "" || cfg.projectID == "" {
 		t.Skip("Skipping integration test: TRIPSWITCH_API_KEY and TRIPSWITCH_PROJECT_ID must be set")
-	}
-
-	if cfg.breakerName == "" || cfg.routerID == "" || cfg.metricName == "" {
-		t.Skip("Skipping integration test: TRIPSWITCH_BREAKER_NAME, TRIPSWITCH_BREAKER_ROUTER_ID, and TRIPSWITCH_BREAKER_METRIC must be set")
 	}
 
 	if cfg.baseURL == "" {
@@ -202,4 +210,49 @@ func TestIntegration_GetStatus(t *testing.T) {
 	}
 
 	t.Logf("Status: %d open, %d closed", status.OpenCount, status.ClosedCount)
+}
+
+func TestIntegration_MetadataSync(t *testing.T) {
+	cfg := loadTestConfig(t)
+
+	client := NewClient(cfg.projectID,
+		WithAPIKey(cfg.apiKey),
+		WithBaseURL(cfg.baseURL),
+		WithMetadataSyncInterval(5*time.Second), // faster refresh for testing
+	)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client.Close(ctx)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Wait for SSE to be ready (metadata sync runs in parallel)
+	if err := client.Ready(ctx); err != nil {
+		t.Fatalf("Ready failed: %v", err)
+	}
+
+	// Give metadata sync time to complete initial fetch
+	time.Sleep(500 * time.Millisecond)
+
+	// Check breakers metadata
+	breakers := client.GetBreakersMetadata()
+	t.Logf("Cached %d breakers metadata:", len(breakers))
+	for _, b := range breakers {
+		t.Logf("  - %s (%s) metadata=%v", b.Name, b.ID, b.Metadata)
+	}
+
+	// Check routers metadata
+	routers := client.GetRoutersMetadata()
+	t.Logf("Cached %d routers metadata:", len(routers))
+	for _, r := range routers {
+		t.Logf("  - %s (%s) metadata=%v", r.Name, r.ID, r.Metadata)
+	}
+
+	// Verify we got some data (if the project has breakers/routers)
+	if len(breakers) == 0 && len(routers) == 0 {
+		t.Log("Warning: no breakers or routers found - is the project configured?")
+	}
 }

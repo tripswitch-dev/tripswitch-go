@@ -55,6 +55,7 @@ func TestListBreakersMetadata(t *testing.T) {
 	ts := NewClient("proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
+		withMetadataSyncDisabled(),
 	)
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -98,6 +99,7 @@ func TestListBreakersMetadata_IfNoneMatchHeader(t *testing.T) {
 	ts := NewClient("proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
+		withMetadataSyncDisabled(),
 	)
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -121,6 +123,7 @@ func TestListBreakersMetadata_NotModified(t *testing.T) {
 	ts := NewClient("proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
+		withMetadataSyncDisabled(),
 	)
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -160,6 +163,7 @@ func TestListRoutersMetadata(t *testing.T) {
 	ts := NewClient("proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
+		withMetadataSyncDisabled(),
 	)
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -192,6 +196,7 @@ func TestListRoutersMetadata_NotModified(t *testing.T) {
 	ts := NewClient("proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
+		withMetadataSyncDisabled(),
 	)
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
