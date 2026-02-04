@@ -331,14 +331,16 @@ func WithGlobalTags(tags map[string]string) Option {
 
 // executeOptions holds per-call configuration for Execute.
 type executeOptions struct {
-	breakers        []string          // Gating: breaker names to check
-	routerID        string            // Router ID for sample routing
-	metrics         map[string]any    // Keys are metric names, values are markers/closures/primitives
-	deferredMetrics any               // func(T, error) map[string]float64, type-asserted in Execute
-	tags            map[string]string // Diagnostic breadcrumbs
-	ignoreErrors    []error           // Errors that don't count as failures
-	errorEvaluator  func(error) bool  // Custom OK logic
-	traceID         string            // Correlation ID
+	breakers        []string                     // Gating: breaker names to check
+	breakerSelector func([]BreakerMeta) []string // Dynamic breaker selection
+	routerID        string                       // Router ID for sample routing
+	routerSelector  func([]RouterMeta) string    // Dynamic router selection
+	metrics         map[string]any               // Keys are metric names, values are markers/closures/primitives
+	deferredMetrics any                          // func(T, error) map[string]float64, type-asserted in Execute
+	tags            map[string]string            // Diagnostic breadcrumbs
+	ignoreErrors    []error                      // Errors that don't count as failures
+	errorEvaluator  func(error) bool             // Custom OK logic
+	traceID         string                       // Correlation ID
 }
 
 // defaultOptions returns an executeOptions with initialized maps.
@@ -361,12 +363,65 @@ func WithBreakers(names ...string) ExecuteOption {
 	}
 }
 
+// WithSelectedBreakers dynamically selects breakers based on cached metadata.
+// The selector function receives the current breaker metadata cache and returns
+// the names of breakers to use for gating.
+//
+// Cannot be combined with WithBreakers - returns ErrConflictingOptions if both are used.
+// Returns ErrMetadataUnavailable if the metadata cache is empty.
+// If the selector returns an empty list, no breaker gating is performed.
+//
+// Example:
+//
+//	tripswitch.Execute(ts, ctx, task,
+//	    tripswitch.WithSelectedBreakers(func(breakers []tripswitch.BreakerMeta) []string {
+//	        var names []string
+//	        for _, b := range breakers {
+//	            if b.Metadata["region"] == "us-east-1" {
+//	                names = append(names, b.Name)
+//	            }
+//	        }
+//	        return names
+//	    }),
+//	)
+func WithSelectedBreakers(fn func([]BreakerMeta) []string) ExecuteOption {
+	return func(opts *executeOptions) {
+		opts.breakerSelector = fn
+	}
+}
+
 // WithRouter specifies the router ID for sample routing.
 // If not specified, no samples will be emitted (metrics will be silently ignored).
 // If metrics are specified but no router, a warning will be logged.
 func WithRouter(routerID string) ExecuteOption {
 	return func(opts *executeOptions) {
 		opts.routerID = routerID
+	}
+}
+
+// WithSelectedRouter dynamically selects a router based on cached metadata.
+// The selector function receives the current router metadata cache and returns
+// the ID of the router to use for sample routing.
+//
+// Cannot be combined with WithRouter - returns ErrConflictingOptions if both are used.
+// Returns ErrMetadataUnavailable if the metadata cache is empty.
+// If the selector returns an empty string, no samples will be emitted.
+//
+// Example:
+//
+//	tripswitch.Execute(ts, ctx, task,
+//	    tripswitch.WithSelectedRouter(func(routers []tripswitch.RouterMeta) string {
+//	        for _, r := range routers {
+//	            if r.Metadata["env"] == "production" {
+//	                return r.ID
+//	            }
+//	        }
+//	        return ""
+//	    }),
+//	)
+func WithSelectedRouter(fn func([]RouterMeta) string) ExecuteOption {
+	return func(opts *executeOptions) {
+		opts.routerSelector = fn
 	}
 }
 
@@ -540,6 +595,10 @@ const ContractVersion = "0.2"
 var (
 	// ErrOpen is returned by Execute when the circuit breaker is open.
 	ErrOpen = errors.New("tripswitch: breaker is open")
+	// ErrConflictingOptions is returned when mutually exclusive Execute options are used.
+	ErrConflictingOptions = errors.New("tripswitch: conflicting execute options")
+	// ErrMetadataUnavailable is returned when a selector is used but metadata cache is empty.
+	ErrMetadataUnavailable = errors.New("tripswitch: metadata cache unavailable")
 )
 
 // IsBreakerError returns true if the error is a circuit breaker error.
@@ -741,6 +800,44 @@ func Execute[T any](c *Client, ctx context.Context, task func() (T, error), opts
 	execOpts := defaultOptions()
 	for _, opt := range opts {
 		opt(execOpts)
+	}
+
+	// 2.5 Resolve dynamic breaker selection
+	if execOpts.breakerSelector != nil {
+		if len(execOpts.breakers) > 0 {
+			return zero, fmt.Errorf("WithBreakers and WithSelectedBreakers: %w", ErrConflictingOptions)
+		}
+		meta := c.GetBreakersMetadata()
+		if meta == nil {
+			return zero, ErrMetadataUnavailable
+		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					c.logger.Warn("breaker selector panicked", "panic", r)
+				}
+			}()
+			execOpts.breakers = execOpts.breakerSelector(meta)
+		}()
+	}
+
+	// 2.6 Resolve dynamic router selection
+	if execOpts.routerSelector != nil {
+		if execOpts.routerID != "" {
+			return zero, fmt.Errorf("WithRouter and WithSelectedRouter: %w", ErrConflictingOptions)
+		}
+		meta := c.GetRoutersMetadata()
+		if meta == nil {
+			return zero, ErrMetadataUnavailable
+		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					c.logger.Warn("router selector panicked", "panic", r)
+				}
+			}()
+			execOpts.routerID = execOpts.routerSelector(meta)
+		}()
 	}
 
 	// 3. If breakers specified, check using min allow_rate policy

@@ -1513,3 +1513,288 @@ func TestExecute_WithDeferredMetrics_Panic(t *testing.T) {
 		t.Errorf("expected panic warning, got warns: %v", logger.warnMsgs)
 	}
 }
+
+// Tests for dynamic breaker/router selection
+
+func TestWithSelectedBreakers_SelectsByMetadata(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Set up metadata cache with breakers
+	client.metaMu.Lock()
+	client.breakersMeta = []BreakerMeta{
+		{ID: "b1", Name: "breaker-east", Metadata: map[string]string{"region": "us-east-1"}},
+		{ID: "b2", Name: "breaker-west", Metadata: map[string]string{"region": "us-west-2"}},
+		{ID: "b3", Name: "breaker-eu", Metadata: map[string]string{"region": "eu-west-1"}},
+	}
+	client.metaMu.Unlock()
+
+	// Set breaker states
+	client.breakerStatesMu.Lock()
+	client.breakerStates["breaker-east"] = breakerState{State: "closed", AllowRate: 1.0}
+	client.breakerStates["breaker-west"] = breakerState{State: "open", AllowRate: 0}
+	client.breakerStates["breaker-eu"] = breakerState{State: "closed", AllowRate: 1.0}
+	client.breakerStatesMu.Unlock()
+
+	// Selector that picks only us-east-1 breakers (which are closed)
+	result, err := Execute(client, context.Background(), func() (string, error) {
+		return "success", nil
+	}, WithSelectedBreakers(func(breakers []BreakerMeta) []string {
+		var names []string
+		for _, b := range breakers {
+			if b.Metadata["region"] == "us-east-1" {
+				names = append(names, b.Name)
+			}
+		}
+		return names
+	}))
+
+	if err != nil {
+		t.Errorf("expected no error for closed breaker, got %v", err)
+	}
+	if result != "success" {
+		t.Errorf("expected result 'success', got %q", result)
+	}
+
+	// Selector that picks us-west-2 breakers (which are open)
+	_, err = Execute(client, context.Background(), func() (string, error) {
+		t.Error("task should not run when breaker is open")
+		return "should-not-run", nil
+	}, WithSelectedBreakers(func(breakers []BreakerMeta) []string {
+		var names []string
+		for _, b := range breakers {
+			if b.Metadata["region"] == "us-west-2" {
+				names = append(names, b.Name)
+			}
+		}
+		return names
+	}))
+
+	if !errors.Is(err, ErrOpen) {
+		t.Errorf("expected ErrOpen for open breaker, got %v", err)
+	}
+}
+
+func TestWithSelectedRouter_SelectsByMetadata(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Set up metadata cache with routers
+	client.metaMu.Lock()
+	client.routersMeta = []RouterMeta{
+		{ID: "r1", Name: "router-prod", Metadata: map[string]string{"env": "production"}},
+		{ID: "r2", Name: "router-staging", Metadata: map[string]string{"env": "staging"}},
+	}
+	client.metaMu.Unlock()
+
+	// Selector that picks production router
+	_, _ = Execute(client, context.Background(), func() (string, error) {
+		return "ok", nil
+	},
+		WithSelectedRouter(func(routers []RouterMeta) string {
+			for _, r := range routers {
+				if r.Metadata["env"] == "production" {
+					return r.ID
+				}
+			}
+			return ""
+		}),
+		WithMetrics(map[string]any{"count": 1}),
+	)
+
+	select {
+	case entry := <-client.reportChan:
+		if entry.RouterID != "r1" {
+			t.Errorf("expected RouterID 'r1', got %q", entry.RouterID)
+		}
+	default:
+		t.Error("expected a report entry")
+	}
+}
+
+func TestWithSelectedBreakers_ConflictWithWithBreakers(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Set up metadata cache
+	client.metaMu.Lock()
+	client.breakersMeta = []BreakerMeta{{ID: "b1", Name: "breaker1"}}
+	client.metaMu.Unlock()
+
+	_, err := Execute(client, context.Background(), func() (string, error) {
+		t.Error("task should not run on conflict")
+		return "should-not-run", nil
+	},
+		WithBreakers("explicit-breaker"),
+		WithSelectedBreakers(func([]BreakerMeta) []string { return []string{"selected-breaker"} }),
+	)
+
+	if !errors.Is(err, ErrConflictingOptions) {
+		t.Errorf("expected ErrConflictingOptions, got %v", err)
+	}
+}
+
+func TestWithSelectedRouter_ConflictWithWithRouter(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Set up metadata cache
+	client.metaMu.Lock()
+	client.routersMeta = []RouterMeta{{ID: "r1", Name: "router1"}}
+	client.metaMu.Unlock()
+
+	_, err := Execute(client, context.Background(), func() (string, error) {
+		t.Error("task should not run on conflict")
+		return "should-not-run", nil
+	},
+		WithRouter("explicit-router"),
+		WithSelectedRouter(func([]RouterMeta) string { return "selected-router" }),
+	)
+
+	if !errors.Is(err, ErrConflictingOptions) {
+		t.Errorf("expected ErrConflictingOptions, got %v", err)
+	}
+}
+
+func TestWithSelectedBreakers_EmptyCache(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Don't set up metadata cache (leave nil)
+
+	_, err := Execute(client, context.Background(), func() (string, error) {
+		t.Error("task should not run when cache is empty")
+		return "should-not-run", nil
+	}, WithSelectedBreakers(func([]BreakerMeta) []string { return []string{"breaker"} }))
+
+	if !errors.Is(err, ErrMetadataUnavailable) {
+		t.Errorf("expected ErrMetadataUnavailable, got %v", err)
+	}
+}
+
+func TestWithSelectedRouter_EmptyCache(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Don't set up metadata cache (leave nil)
+
+	_, err := Execute(client, context.Background(), func() (string, error) {
+		t.Error("task should not run when cache is empty")
+		return "should-not-run", nil
+	}, WithSelectedRouter(func([]RouterMeta) string { return "router" }))
+
+	if !errors.Is(err, ErrMetadataUnavailable) {
+		t.Errorf("expected ErrMetadataUnavailable, got %v", err)
+	}
+}
+
+func TestWithSelectedBreakers_EmptySelection(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Set up metadata cache
+	client.metaMu.Lock()
+	client.breakersMeta = []BreakerMeta{{ID: "b1", Name: "breaker1"}}
+	client.metaMu.Unlock()
+
+	// Selector returns empty list - should proceed without gating
+	result, err := Execute(client, context.Background(), func() (string, error) {
+		return "success", nil
+	}, WithSelectedBreakers(func([]BreakerMeta) []string { return nil }))
+
+	if err != nil {
+		t.Errorf("expected no error with empty selection, got %v", err)
+	}
+	if result != "success" {
+		t.Errorf("expected result 'success', got %q", result)
+	}
+}
+
+func TestWithSelectedRouter_EmptySelection(t *testing.T) {
+	client, cleanup := newTestClient(t)
+	defer cleanup()
+
+	// Set up metadata cache
+	client.metaMu.Lock()
+	client.routersMeta = []RouterMeta{{ID: "r1", Name: "router1"}}
+	client.metaMu.Unlock()
+
+	// Selector returns empty string - should not emit samples
+	_, _ = Execute(client, context.Background(), func() (string, error) {
+		return "ok", nil
+	},
+		WithSelectedRouter(func([]RouterMeta) string { return "" }),
+		WithMetrics(map[string]any{"count": 1}),
+	)
+
+	// Should be no samples (empty router means no emission)
+	select {
+	case entry := <-client.reportChan:
+		t.Errorf("expected no samples with empty router selection, got %+v", entry)
+	default:
+		// Good - no samples
+	}
+}
+
+func TestWithSelectedBreakers_SelectorPanic(t *testing.T) {
+	logger := &mockLogger{}
+	client, cleanup := newTestClient(t, WithLogger(logger))
+	defer cleanup()
+
+	// Set up metadata cache
+	client.metaMu.Lock()
+	client.breakersMeta = []BreakerMeta{{ID: "b1", Name: "breaker1"}}
+	client.metaMu.Unlock()
+
+	// Panicking selector — should recover, log warning, and execute with no gating
+	result, err := Execute(client, context.Background(), func() (string, error) {
+		return "success", nil
+	}, WithSelectedBreakers(func([]BreakerMeta) []string { panic("boom") }))
+
+	if err != nil {
+		t.Errorf("expected no error after selector panic, got %v", err)
+	}
+	if result != "success" {
+		t.Errorf("expected result 'success', got %q", result)
+	}
+	if !logger.HasWarn("breaker selector panicked") {
+		t.Errorf("expected panic warning, got warns: %v", logger.warnMsgs)
+	}
+}
+
+func TestWithSelectedRouter_SelectorPanic(t *testing.T) {
+	logger := &mockLogger{}
+	client, cleanup := newTestClient(t, WithLogger(logger))
+	defer cleanup()
+
+	// Set up metadata cache
+	client.metaMu.Lock()
+	client.routersMeta = []RouterMeta{{ID: "r1", Name: "router1"}}
+	client.metaMu.Unlock()
+
+	// Panicking selector — should recover, log warning, and execute with no samples
+	result, err := Execute(client, context.Background(), func() (string, error) {
+		return "success", nil
+	},
+		WithSelectedRouter(func([]RouterMeta) string { panic("boom") }),
+		WithMetrics(map[string]any{"count": 1}),
+	)
+
+	if err != nil {
+		t.Errorf("expected no error after selector panic, got %v", err)
+	}
+	if result != "success" {
+		t.Errorf("expected result 'success', got %q", result)
+	}
+	if !logger.HasWarn("router selector panicked") {
+		t.Errorf("expected panic warning, got warns: %v", logger.warnMsgs)
+	}
+
+	// No router ID resolved, so no samples should be emitted
+	select {
+	case entry := <-client.reportChan:
+		t.Errorf("expected no samples after router selector panic, got %+v", entry)
+	default:
+		// Good - no samples
+	}
+}
