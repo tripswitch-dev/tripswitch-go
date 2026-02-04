@@ -200,8 +200,8 @@ func TestStats(t *testing.T) {
 		ts.Close(ctx)
 	}()
 
+	atomic.StoreUint64(&ts.droppedSamples, 5)
 	ts.stats.mu.Lock()
-	ts.stats.droppedSamples = 5
 	ts.stats.sseConnected = true
 	ts.stats.mu.Unlock()
 

@@ -140,7 +140,6 @@ type Client struct {
 	stats struct {
 		// a lock for the stats since they are updated concurrently
 		mu                  sync.RWMutex
-		droppedSamples      uint64
 		bufferSize          int
 		sseConnected        bool
 		sseReconnects       uint64
@@ -230,7 +229,7 @@ type SDKStats struct {
 func (c *Client) Stats() SDKStats {
 	c.stats.mu.RLock()
 	s := SDKStats{
-		DroppedSamples:      c.stats.droppedSamples,
+		DroppedSamples:      atomic.LoadUint64(&c.droppedSamples),
 		BufferSize:          c.stats.bufferSize,
 		SSEConnected:        c.stats.sseConnected,
 		SSEReconnects:       c.stats.sseReconnects,
