@@ -1798,3 +1798,106 @@ func TestWithSelectedRouter_SelectorPanic(t *testing.T) {
 		// Good - no samples
 	}
 }
+
+func TestStats_LastSSEEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: {\"breaker\": \"test\", \"state\": \"closed\", \"allow_rate\": 1.0}\n\n")
+		flusher.Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	client := NewClient("proj_abc", WithBaseURL(server.URL), withMetadataSyncDisabled())
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client.Close(ctx)
+	}()
+
+	// Wait for SSE to connect
+	select {
+	case <-client.sseReady:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for SSE ready")
+	}
+
+	stats := client.Stats()
+	if stats.LastSSEEvent.IsZero() {
+		t.Error("expected LastSSEEvent to be non-zero after SSE event")
+	}
+	if time.Since(stats.LastSSEEvent) > 5*time.Second {
+		t.Errorf("LastSSEEvent too old: %v", stats.LastSSEEvent)
+	}
+}
+
+func TestStats_FlushFailures(t *testing.T) {
+	// Server that always returns 500 so retries exhaust quickly
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client := NewClient("proj_test",
+		WithBaseURL(server.URL),
+		WithIngestSecret("aabbccddee11223344556677889900aabbccddeeff11223344556677889900aa"),
+		withMetadataSyncDisabled(),
+	)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client.Close(ctx)
+	}()
+
+	batch := []reportEntry{
+		{
+			RouterID: "router-1",
+			Metric:   "latency_ms",
+			TsMs:     time.Now().UnixMilli(),
+			OK:       true,
+			Value:    42.0,
+		},
+	}
+
+	client.sendBatch(batch)
+
+	stats := client.Stats()
+	if stats.FlushFailures != 1 {
+		t.Errorf("expected FlushFailures=1, got %d", stats.FlushFailures)
+	}
+}
+
+func TestStats_CachedBreakers(t *testing.T) {
+	client := NewClient("proj_abc",
+		WithBaseURL("http://localhost:0"),
+		withMetadataSyncDisabled(),
+	)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client.Close(ctx)
+	}()
+
+	// Initially no cached breakers
+	stats := client.Stats()
+	if stats.CachedBreakers != 0 {
+		t.Errorf("expected CachedBreakers=0, got %d", stats.CachedBreakers)
+	}
+
+	// Populate breaker cache
+	client.breakerStatesMu.Lock()
+	client.breakerStates["brk-1"] = breakerState{State: "closed", AllowRate: 1.0}
+	client.breakerStates["brk-2"] = breakerState{State: "open", AllowRate: 0.0}
+	client.breakerStates["brk-3"] = breakerState{State: "half_open", AllowRate: 0.5}
+	client.breakerStatesMu.Unlock()
+
+	stats = client.Stats()
+	if stats.CachedBreakers != 3 {
+		t.Errorf("expected CachedBreakers=3, got %d", stats.CachedBreakers)
+	}
+}
