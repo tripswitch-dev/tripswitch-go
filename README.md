@@ -121,13 +121,16 @@ func main() {
 | `WithOnStateChange(fn)` | Callback on breaker state transitions | `nil` |
 | `WithTraceIDExtractor(fn)` | Extract trace ID from context for each sample | `nil` |
 | `WithGlobalTags(tags)` | Tags applied to all samples | `nil` |
+| `WithMetadataSyncInterval(d)` | Interval for refreshing breaker/router metadata from the API. Set ≤ 0 to disable. | `30s` |
 
 ### Execute Options
 
 | Option | Description |
 |--------|-------------|
 | `WithBreakers(names...)` | Breaker names to check before executing (any open → `ErrOpen`). If omitted, no gating is performed. |
+| `WithSelectedBreakers(fn)` | Dynamically select breakers based on cached metadata. Mutually exclusive with `WithBreakers`. |
 | `WithRouter(routerID)` | Router ID for sample routing. If omitted, no samples are emitted. |
+| `WithSelectedRouter(fn)` | Dynamically select a router based on cached metadata. Mutually exclusive with `WithRouter`. |
 | `WithMetrics(map[string]any)` | Metrics to report (`Latency` sentinel, `func() float64`, or numeric values) |
 | `WithDeferredMetrics(fn)` | Extract metrics from the task's return value (e.g., token counts from API responses) |
 | `WithTag(key, value)` | Add a single diagnostic tag |
@@ -253,10 +256,20 @@ type SDKStats struct {
 ### Error Handling
 
 ```go
-var ErrOpen = errors.New("tripswitch: breaker is open")
+var (
+    ErrOpen                = errors.New("tripswitch: breaker is open")
+    ErrConflictingOptions  = errors.New("tripswitch: conflicting execute options")
+    ErrMetadataUnavailable = errors.New("tripswitch: metadata cache unavailable")
+)
 
 func IsBreakerError(err error) bool
 ```
+
+| Error | Cause |
+|-------|-------|
+| `ErrOpen` | A specified breaker is open or request was throttled in half-open state |
+| `ErrConflictingOptions` | Mutually exclusive options used (e.g. `WithBreakers` + `WithSelectedBreakers`) |
+| `ErrMetadataUnavailable` | Selector used but metadata cache hasn't been populated yet |
 
 Use `IsBreakerError` to check if an error is circuit breaker related:
 
@@ -317,6 +330,51 @@ result, err := tripswitch.Execute(ts, ctx, func() (*anthropic.Response, error) {
 ```
 
 Deferred metrics are resolved after the task completes and merged with eager metrics into the same sample batch. If the function panics, it is recovered and a warning is logged — eager metrics are still emitted.
+
+### Dynamic Selection
+
+Use `WithSelectedBreakers` and `WithSelectedRouter` to choose breakers or routers at runtime based on cached metadata. The SDK periodically syncs metadata from the API (default 30s), and your selector receives the current snapshot.
+
+```go
+// Gate on breakers matching a metadata property
+result, err := tripswitch.Execute(ts, ctx, task,
+    tripswitch.WithSelectedBreakers(func(breakers []tripswitch.BreakerMeta) []string {
+        var names []string
+        for _, b := range breakers {
+            if b.Metadata["region"] == "us-east-1" {
+                names = append(names, b.Name)
+            }
+        }
+        return names
+    }),
+)
+
+// Route samples to a router matching a metadata property
+result, err := tripswitch.Execute(ts, ctx, task,
+    tripswitch.WithSelectedRouter(func(routers []tripswitch.RouterMeta) string {
+        for _, r := range routers {
+            if r.Metadata["env"] == "production" {
+                return r.ID
+            }
+        }
+        return ""
+    }),
+    tripswitch.WithMetrics(map[string]any{"latency": tripswitch.Latency}),
+)
+```
+
+**Constraints:**
+- `WithBreakers` and `WithSelectedBreakers` are mutually exclusive — using both returns `ErrConflictingOptions`
+- `WithRouter` and `WithSelectedRouter` are mutually exclusive — using both returns `ErrConflictingOptions`
+- If the metadata cache hasn't been populated yet, returns `ErrMetadataUnavailable`
+- If the selector returns an empty list/string, no gating or sample emission occurs
+
+You can also access the metadata cache directly:
+
+```go
+breakers := ts.GetBreakersMetadata() // []BreakerMeta
+routers := ts.GetRoutersMetadata()   // []RouterMeta
+```
 
 ### Report
 
