@@ -140,11 +140,12 @@ type Client struct {
 	stats struct {
 		// a lock for the stats since they are updated concurrently
 		mu                  sync.RWMutex
-		droppedSamples      uint64
 		bufferSize          int
 		sseConnected        bool
 		sseReconnects       uint64
 		lastSuccessfulFlush time.Time
+		lastSSEEvent        time.Time
+		flushFailures       uint64
 	}
 
 	// for SSE state sync
@@ -219,20 +220,30 @@ type SDKStats struct {
 	SSEConnected        bool
 	SSEReconnects       uint64
 	LastSuccessfulFlush time.Time
+	LastSSEEvent        time.Time // Zero if no events received yet
+	FlushFailures       uint64    // Batches dropped after retry exhaustion
+	CachedBreakers      int       // Number of breakers in local state cache
 }
 
 // Stats returns a snapshot of the SDK's health metrics.
 func (c *Client) Stats() SDKStats {
 	c.stats.mu.RLock()
-	defer c.stats.mu.RUnlock()
-
-	return SDKStats{
-		DroppedSamples:      c.stats.droppedSamples,
+	s := SDKStats{
+		DroppedSamples:      atomic.LoadUint64(&c.droppedSamples),
 		BufferSize:          c.stats.bufferSize,
 		SSEConnected:        c.stats.sseConnected,
 		SSEReconnects:       c.stats.sseReconnects,
 		LastSuccessfulFlush: c.stats.lastSuccessfulFlush,
+		LastSSEEvent:        c.stats.lastSSEEvent,
+		FlushFailures:       c.stats.flushFailures,
 	}
+	c.stats.mu.RUnlock()
+
+	c.breakerStatesMu.RLock()
+	s.CachedBreakers = len(c.breakerStates)
+	c.breakerStatesMu.RUnlock()
+
+	return s
 }
 
 // WithAPIKey sets the project API key for SSE subscriptions and state reads.
@@ -707,9 +718,10 @@ func (c *Client) startSSEListener() {
 		}
 		c.updateBreakerState(event.Breaker, event.State, event.AllowRate)
 
-		// Mark SSE as connected
+		// Mark SSE as connected and record event time
 		c.stats.mu.Lock()
 		c.stats.sseConnected = true
+		c.stats.lastSSEEvent = time.Now()
 		c.stats.mu.Unlock()
 
 		// Signal that initial sync is complete
@@ -1142,6 +1154,9 @@ func (c *Client) sendBatch(batch []reportEntry) {
 	// All retries exhausted
 	c.logger.Error("dropping batch after retries exhausted", "count", len(batch))
 	atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
+	c.stats.mu.Lock()
+	c.stats.flushFailures++
+	c.stats.mu.Unlock()
 }
 
 // Status represents the project health status.
