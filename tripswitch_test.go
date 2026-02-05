@@ -47,6 +47,13 @@ func (m *mockLogger) HasWarn(msg string) bool {
 	return false
 }
 
+// setBreakerState is a test helper to set breaker state in the cache.
+func setBreakerState(c *Client, name, state string, allowRate float64) {
+	c.breakerStatesMu.Lock()
+	c.breakerStates[name] = breakerState{State: state, AllowRate: allowRate}
+	c.breakerStatesMu.Unlock()
+}
+
 // testRouterID is a constant router ID used for testing.
 const testRouterID = "test-router-id"
 
@@ -1876,9 +1883,10 @@ func TestStats_CachedBreakers(t *testing.T) {
 	client := NewClient("proj_abc",
 		WithBaseURL("http://localhost:0"),
 		withMetadataSyncDisabled(),
+		withSSEDisabled(),
 	)
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 		client.Close(ctx)
 	}()
@@ -1890,14 +1898,109 @@ func TestStats_CachedBreakers(t *testing.T) {
 	}
 
 	// Populate breaker cache
-	client.breakerStatesMu.Lock()
-	client.breakerStates["brk-1"] = breakerState{State: "closed", AllowRate: 1.0}
-	client.breakerStates["brk-2"] = breakerState{State: "open", AllowRate: 0.0}
-	client.breakerStates["brk-3"] = breakerState{State: "half_open", AllowRate: 0.5}
-	client.breakerStatesMu.Unlock()
+	setBreakerState(client, "brk-1", "closed", 1.0)
+	setBreakerState(client, "brk-2", "open", 0.0)
+	setBreakerState(client, "brk-3", "half_open", 0.5)
 
 	stats = client.Stats()
 	if stats.CachedBreakers != 3 {
 		t.Errorf("expected CachedBreakers=3, got %d", stats.CachedBreakers)
+	}
+}
+
+func TestGetState(t *testing.T) {
+	client := NewClient("proj_test",
+		WithBaseURL("http://localhost:0"),
+		withMetadataSyncDisabled(),
+		withSSEDisabled(),
+	)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		client.Close(ctx)
+	}()
+
+	// Unknown breaker returns nil
+	if state := client.GetState("unknown"); state != nil {
+		t.Errorf("expected nil for unknown breaker, got %+v", state)
+	}
+
+	// Populate cache
+	setBreakerState(client, "checkout", "open", 0.0)
+	setBreakerState(client, "payment", "closed", 1.0)
+
+	// Known breaker returns correct state
+	state := client.GetState("checkout")
+	if state == nil {
+		t.Fatal("expected non-nil state for checkout")
+	}
+	if state.Name != "checkout" {
+		t.Errorf("expected Name=checkout, got %s", state.Name)
+	}
+	if state.State != "open" {
+		t.Errorf("expected State=open, got %s", state.State)
+	}
+	if state.AllowRate != 0.0 {
+		t.Errorf("expected AllowRate=0.0, got %f", state.AllowRate)
+	}
+
+	// Still returns nil for unknown
+	if state := client.GetState("nonexistent"); state != nil {
+		t.Errorf("expected nil for nonexistent breaker, got %+v", state)
+	}
+}
+
+func TestGetAllStates(t *testing.T) {
+	client := NewClient("proj_test",
+		WithBaseURL("http://localhost:0"),
+		withMetadataSyncDisabled(),
+		withSSEDisabled(),
+	)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		client.Close(ctx)
+	}()
+
+	// Empty cache returns empty map
+	states := client.GetAllStates()
+	if len(states) != 0 {
+		t.Errorf("expected empty map, got %d entries", len(states))
+	}
+
+	// Populate cache
+	setBreakerState(client, "checkout", "open", 0.0)
+	setBreakerState(client, "payment", "closed", 1.0)
+	setBreakerState(client, "shipping", "half_open", 0.5)
+
+	// Returns all states
+	states = client.GetAllStates()
+	if len(states) != 3 {
+		t.Errorf("expected 3 states, got %d", len(states))
+	}
+
+	// Verify each state
+	checkout, ok := states["checkout"]
+	if !ok {
+		t.Fatal("expected checkout in states")
+	}
+	if checkout.Name != "checkout" || checkout.State != "open" || checkout.AllowRate != 0.0 {
+		t.Errorf("unexpected checkout state: %+v", checkout)
+	}
+
+	payment, ok := states["payment"]
+	if !ok {
+		t.Fatal("expected payment in states")
+	}
+	if payment.Name != "payment" || payment.State != "closed" || payment.AllowRate != 1.0 {
+		t.Errorf("unexpected payment state: %+v", payment)
+	}
+
+	shipping, ok := states["shipping"]
+	if !ok {
+		t.Fatal("expected shipping in states")
+	}
+	if shipping.Name != "shipping" || shipping.State != "half_open" || shipping.AllowRate != 0.5 {
+		t.Errorf("unexpected shipping state: %+v", shipping)
 	}
 }

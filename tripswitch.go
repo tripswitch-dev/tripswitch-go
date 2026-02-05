@@ -87,6 +87,14 @@ type breakerState struct {
 	AllowRate float64 // 0.0 to 1.0
 }
 
+// BreakerStatus represents the cached state of a circuit breaker.
+// Returned by GetState and GetAllStates for debugging and observability.
+type BreakerStatus struct {
+	Name      string
+	State     string  // "open", "closed", "half_open"
+	AllowRate float64 // 0.0 to 1.0
+}
+
 // latencyMarker is the unexported type for the Latency sentinel.
 // When used with WithMetrics, the SDK automatically computes task duration in milliseconds.
 type latencyMarker struct{}
@@ -168,6 +176,7 @@ type Client struct {
 	routersETag      string
 	metaSyncInterval time.Duration
 	metaSyncDisabled bool
+	sseDisabled      bool
 }
 
 // Option is a functional option for configuring the client.
@@ -195,7 +204,9 @@ func NewClient(projectID string, opts ...Option) *Client {
 	c.ctx, c.cancel = context.WithCancel(context.Background())
 	c.sseEventURL = c.baseURL + "/v1/projects/" + c.projectID + "/breakers/state:stream"
 
-	go c.startSSEListener()
+	if !c.sseDisabled {
+		go c.startSSEListener()
+	}
 	go c.startFlusher()
 	if !c.metaSyncDisabled {
 		c.wg.Add(1)
@@ -244,6 +255,41 @@ func (c *Client) Stats() SDKStats {
 	c.breakerStatesMu.RUnlock()
 
 	return s
+}
+
+// GetState returns the cached state for a single breaker.
+// Returns nil if the breaker is not in the cache.
+// Useful for debugging to verify the SDK's local state matches expected state.
+func (c *Client) GetState(name string) *BreakerStatus {
+	c.breakerStatesMu.RLock()
+	defer c.breakerStatesMu.RUnlock()
+
+	state, ok := c.breakerStates[name]
+	if !ok {
+		return nil
+	}
+	return &BreakerStatus{
+		Name:      name,
+		State:     state.State,
+		AllowRate: state.AllowRate,
+	}
+}
+
+// GetAllStates returns a copy of all cached breaker states.
+// Useful for admin dashboards, health checks, and debugging.
+func (c *Client) GetAllStates() map[string]BreakerStatus {
+	c.breakerStatesMu.RLock()
+	defer c.breakerStatesMu.RUnlock()
+
+	result := make(map[string]BreakerStatus, len(c.breakerStates))
+	for name, state := range c.breakerStates {
+		result[name] = BreakerStatus{
+			Name:      name,
+			State:     state.State,
+			AllowRate: state.AllowRate,
+		}
+	}
+	return result
 }
 
 // WithAPIKey sets the project API key for SSE subscriptions and state reads.
@@ -324,6 +370,14 @@ func WithMetadataSyncInterval(d time.Duration) Option {
 func withMetadataSyncDisabled() Option {
 	return func(c *Client) {
 		c.metaSyncDisabled = true
+	}
+}
+
+// withSSEDisabled disables the SSE listener goroutine.
+// This is intended for tests that don't need SSE state sync.
+func withSSEDisabled() Option {
+	return func(c *Client) {
+		c.sseDisabled = true
 	}
 }
 
