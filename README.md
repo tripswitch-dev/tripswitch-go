@@ -250,6 +250,38 @@ type SDKStats struct {
     SSEConnected        bool      // SSE connection status
     SSEReconnects       uint64    // Count of SSE reconnections
     LastSuccessfulFlush time.Time // Timestamp of last successful flush
+    LastSSEEvent        time.Time // Timestamp of last SSE event (zero if none received)
+    FlushFailures       uint64    // Batches dropped after retry exhaustion
+    CachedBreakers      int       // Number of breakers in local state cache
+}
+```
+
+### Breaker State Inspection
+
+These methods expose the SDK's local breaker cache for debugging, logging, and health checks. For gating traffic on breaker state, use `Execute` with `WithBreakers` — it handles state checks, throttling, and sample reporting together.
+
+```go
+type BreakerStatus struct {
+    Name      string
+    State     string  // "open", "closed", "half_open"
+    AllowRate float64 // 0.0 to 1.0
+}
+
+func (c *Client) GetState(name string) *BreakerStatus
+func (c *Client) GetAllStates() map[string]BreakerStatus
+```
+
+`GetState` returns the cached state of a single breaker, or `nil` if not found. `GetAllStates` returns a copy of all cached breaker states. Both return copies safe to hold without affecting internal state.
+
+```go
+// Debug: why is checkout rejecting requests?
+if status := ts.GetState("checkout"); status != nil {
+    log.Printf("checkout breaker: state=%s allow_rate=%.2f", status.State, status.AllowRate)
+}
+
+// Health endpoint: expose all breaker states to monitoring
+for name, status := range ts.GetAllStates() {
+    log.Printf("breaker %s: %s", name, status.State)
 }
 ```
 
