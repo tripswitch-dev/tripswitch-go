@@ -174,7 +174,7 @@ func TestIntegration_GracefulShutdown(t *testing.T) {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
-	err := client.Close(shutdownCtx)
+	err = client.Close(shutdownCtx)
 	if err != nil {
 		t.Fatalf("Close failed: %v", err)
 	}
