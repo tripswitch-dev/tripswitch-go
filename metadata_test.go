@@ -52,11 +52,15 @@ func TestListBreakersMetadata(t *testing.T) {
 	})
 	defer server.Close()
 
-	ts := NewClient("proj_123",
+	ts, err := NewClient(context.Background(), "proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
 		withMetadataSyncDisabled(),
+		withSSEDisabled(),
 	)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -96,18 +100,22 @@ func TestListBreakersMetadata_IfNoneMatchHeader(t *testing.T) {
 	})
 	defer server.Close()
 
-	ts := NewClient("proj_123",
+	ts, err := NewClient(context.Background(), "proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
 		withMetadataSyncDisabled(),
+		withSSEDisabled(),
 	)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		ts.Close(ctx)
 	}()
 
-	_, _, err := ts.ListBreakersMetadata(context.Background(), `"abc123"`)
+	_, _, err = ts.ListBreakersMetadata(context.Background(), `"abc123"`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -120,11 +128,15 @@ func TestListBreakersMetadata_NotModified(t *testing.T) {
 	})
 	defer server.Close()
 
-	ts := NewClient("proj_123",
+	ts, err := NewClient(context.Background(), "proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
 		withMetadataSyncDisabled(),
+		withSSEDisabled(),
 	)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -160,11 +172,15 @@ func TestListRoutersMetadata(t *testing.T) {
 	})
 	defer server.Close()
 
-	ts := NewClient("proj_123",
+	ts, err := NewClient(context.Background(), "proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
 		withMetadataSyncDisabled(),
+		withSSEDisabled(),
 	)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -193,11 +209,15 @@ func TestListRoutersMetadata_NotModified(t *testing.T) {
 	})
 	defer server.Close()
 
-	ts := NewClient("proj_123",
+	ts, err := NewClient(context.Background(), "proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
 		withMetadataSyncDisabled(),
+		withSSEDisabled(),
 	)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()

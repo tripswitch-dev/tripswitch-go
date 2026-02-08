@@ -19,18 +19,15 @@ import (
 
 func main() {
 	// Create Tripswitch client
-	ts := tripswitch.NewClient("proj_abc123",
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ts, err := tripswitch.NewClient(ctx, "proj_abc123",
 		tripswitch.WithAPIKey("eb_pk_..."),
 		tripswitch.WithIngestSecret("..."), // 64-char hex string
 	)
-
-	// Wait for initial state sync
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := ts.Ready(ctx); err != nil {
-		cancel()
+	cancel()
+	if err != nil {
 		log.Fatal("tripswitch failed to initialize:", err)
 	}
-	cancel()
 
 	// Configuration (get these values from your breaker config via API or dashboard)
 	const (

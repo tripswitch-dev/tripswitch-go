@@ -79,7 +79,9 @@ func TestNewClient(t *testing.T) {
 	tags := map[string]string{"env": "testing"}
 	extractor := func(ctx context.Context) string { return "trace-id" }
 
-	ts := NewClient(projectID,
+	ctx, ctxCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer ctxCancel()
+	ts, err := NewClient(ctx, projectID,
 		WithAPIKey(apiKey),
 		WithIngestKey(ingestKey),
 		WithFailOpen(false),
@@ -90,10 +92,13 @@ func TestNewClient(t *testing.T) {
 		WithOnStateChange(func(name, from, to string) {}),
 		withMetadataSyncDisabled(),
 	)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		ts.Close(ctx)
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		ts.Close(closeCtx)
 	}()
 
 	if ts.projectID != projectID {
@@ -125,11 +130,16 @@ func TestNewClient(t *testing.T) {
 	}
 
 	// Test default values with mock server
-	tsDefault := NewClient("proj_456", WithBaseURL(server.URL), withMetadataSyncDisabled())
+	ctx2, ctx2Cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer ctx2Cancel()
+	tsDefault, err := NewClient(ctx2, "proj_456", WithBaseURL(server.URL), withMetadataSyncDisabled())
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		tsDefault.Close(ctx)
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		tsDefault.Close(closeCtx)
 	}()
 
 	if tsDefault.failOpen != true {
@@ -162,18 +172,17 @@ func TestClose(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ts := NewClient("proj_abc", WithBaseURL(server.URL), withMetadataSyncDisabled())
-
-	// Wait for SSE connection to be established before closing
-	// This avoids race condition where Close() is called while SSE is still connecting
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = ts.Ready(ctx) // Ignore error - just ensuring connection attempt completes
+	ts, err := NewClient(ctx, "proj_abc", WithAPIKey("eb_pk_test"), WithBaseURL(server.URL), withMetadataSyncDisabled())
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer closeCancel()
 
-	err := ts.Close(closeCtx)
+	err = ts.Close(closeCtx)
 	if err != nil {
 		t.Fatalf("Close() returned an error: %v", err)
 	}
@@ -200,11 +209,16 @@ func TestStats(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ts := NewClient("proj_abc", WithBaseURL(server.URL), withMetadataSyncDisabled())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ts, err := NewClient(ctx, "proj_abc", WithBaseURL(server.URL), withMetadataSyncDisabled())
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		ts.Close(ctx)
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		ts.Close(closeCtx)
 	}()
 
 	atomic.StoreUint64(&ts.droppedSamples, 5)
@@ -235,9 +249,9 @@ func TestIsBreakerError(t *testing.T) {
 	}
 }
 
-func TestReady(t *testing.T) {
+func TestNewClient_BlocksUntilSSEReady(t *testing.T) {
 	// Start a mock SSE server
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
@@ -262,23 +276,21 @@ func TestReady(t *testing.T) {
 			return
 		}
 	}))
-	defer ts.Close()
+	defer server.Close()
 
-	client := NewClient("proj_test", WithBaseURL(ts.URL), withMetadataSyncDisabled())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// NewClient should block until the initial SSE event is received
+	client, err := NewClient(ctx, "proj_test", WithAPIKey("eb_pk_test"), WithBaseURL(server.URL), withMetadataSyncDisabled())
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
 	defer func() {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer closeCancel()
 		client.Close(closeCtx)
 	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-
-	// Ready should block until the initial event is received
-	err := client.Ready(ctx)
-	if err != nil {
-		t.Fatalf("Ready() failed: %v", err)
-	}
 
 	// Verify the state was updated
 	client.breakerStatesMu.RLock()
@@ -288,6 +300,44 @@ func TestReady(t *testing.T) {
 	if !ok || state.State != "closed" || state.AllowRate != 1.0 {
 		t.Errorf("expected test-breaker state to be closed with allow_rate 1.0, got %+v", state)
 	}
+}
+
+func TestNewClient_TimeoutReturnsError(t *testing.T) {
+	// Start a server that never sends SSE events
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// Never send any events — just hang
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	client, err := NewClient(ctx, "proj_test", WithAPIKey("eb_pk_test"), WithBaseURL(server.URL), withMetadataSyncDisabled())
+	if err == nil {
+		client.Close(context.Background())
+		t.Fatal("expected error from NewClient when context times out, got nil")
+	}
+	if client != nil {
+		t.Error("expected nil client on error")
+	}
+}
+
+func TestNewClient_NoAPIKey_ReturnsImmediately(t *testing.T) {
+	// Without an API key, NewClient should not wait for SSE
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	client, err := NewClient(ctx, "proj_test", withMetadataSyncDisabled(), withSSEDisabled())
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer closeCancel()
+		client.Close(closeCtx)
+	}()
 }
 
 // newTestClient creates a client with a mock SSE server for testing.
@@ -306,8 +356,12 @@ func newTestClient(t *testing.T, opts ...Option) (*Client, func()) {
 		<-r.Context().Done()
 	}))
 
-	allOpts := append([]Option{WithBaseURL(server.URL), withMetadataSyncDisabled()}, opts...)
-	client := NewClient("proj_test", allOpts...)
+	allOpts := append([]Option{WithBaseURL(server.URL), withMetadataSyncDisabled(), withSSEDisabled(), withFlusherDisabled()}, opts...)
+	client, err := NewClient(context.Background(), "proj_test", allOpts...)
+	if err != nil {
+		server.Close()
+		t.Fatalf("newTestClient: NewClient() returned error: %v", err)
+	}
 
 	cleanup := func() {
 		// Close client first (cancels SSE subscription), then close server
@@ -476,7 +530,7 @@ func TestExecute_WithErrorEvaluator(t *testing.T) {
 		if !entry.OK {
 			t.Error("expected evaluator to mark 'ok-error' as OK")
 		}
-	case <-time.After(time.Second):
+	default:
 		t.Error("expected a report entry")
 	}
 
@@ -490,7 +544,7 @@ func TestExecute_WithErrorEvaluator(t *testing.T) {
 		if entry.OK {
 			t.Error("expected evaluator to mark 'bad-error' as failure")
 		}
-	case <-time.After(time.Second):
+	default:
 		t.Error("expected a report entry")
 	}
 }
@@ -739,7 +793,10 @@ func TestSendBatch_PayloadFormat(t *testing.T) {
 
 	// Use a valid 64-char hex string for the ingest secret
 	ingestSecret := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	client := NewClient("proj_test", WithBaseURL(server.URL), WithIngestSecret(ingestSecret), withMetadataSyncDisabled())
+	client, err := NewClient(context.Background(), "proj_test", WithBaseURL(server.URL), WithIngestSecret(ingestSecret), withMetadataSyncDisabled())
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -842,19 +899,22 @@ func TestGetStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient("proj_123",
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := NewClient(ctx, "proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
 		withMetadataSyncDisabled(),
 	)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		client.Close(ctx)
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		client.Close(closeCtx)
 	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
 	status, err := client.GetStatus(ctx)
 	if err != nil {
@@ -947,7 +1007,7 @@ func TestExecute_WithMetricsClosure(t *testing.T) {
 		if entry.Value != 42.0 {
 			t.Errorf("expected value 42.0, got %f", entry.Value)
 		}
-	case <-time.After(2 * time.Second):
+	default:
 		t.Error("expected a report entry")
 	}
 }
@@ -1512,7 +1572,7 @@ func TestExecute_WithDeferredMetrics_Panic(t *testing.T) {
 		if entry.Metric != "count" {
 			t.Errorf("expected metric 'count', got %q", entry.Metric)
 		}
-	case <-time.After(time.Second):
+	default:
 		t.Error("expected eager metric to still be emitted after deferred panic")
 	}
 
@@ -1820,19 +1880,17 @@ func TestStats_LastSSEEvent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient("proj_abc", WithBaseURL(server.URL), withMetadataSyncDisabled())
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		client.Close(ctx)
-	}()
-
-	// Wait for SSE to connect
-	select {
-	case <-client.sseReady:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for SSE ready")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := NewClient(ctx, "proj_abc", WithAPIKey("eb_pk_test"), WithBaseURL(server.URL), withMetadataSyncDisabled())
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
 	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		client.Close(closeCtx)
+	}()
 
 	stats := client.Stats()
 	if stats.LastSSEEvent.IsZero() {
@@ -1850,11 +1908,15 @@ func TestStats_FlushFailures(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient("proj_test",
+	client, err := NewClient(context.Background(), "proj_test",
 		WithBaseURL(server.URL),
 		WithIngestSecret("aabbccddee11223344556677889900aabbccddeeff11223344556677889900aa"),
+		WithLogger(&mockLogger{}),
 		withMetadataSyncDisabled(),
 	)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -1880,11 +1942,14 @@ func TestStats_FlushFailures(t *testing.T) {
 }
 
 func TestStats_CachedBreakers(t *testing.T) {
-	client := NewClient("proj_abc",
+	client, err := NewClient(context.Background(), "proj_abc",
 		WithBaseURL("http://localhost:0"),
 		withMetadataSyncDisabled(),
 		withSSEDisabled(),
 	)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
@@ -1909,11 +1974,14 @@ func TestStats_CachedBreakers(t *testing.T) {
 }
 
 func TestGetState(t *testing.T) {
-	client := NewClient("proj_test",
+	client, err := NewClient(context.Background(), "proj_test",
 		WithBaseURL("http://localhost:0"),
 		withMetadataSyncDisabled(),
 		withSSEDisabled(),
 	)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
@@ -1951,11 +2019,14 @@ func TestGetState(t *testing.T) {
 }
 
 func TestGetAllStates(t *testing.T) {
-	client := NewClient("proj_test",
+	client, err := NewClient(context.Background(), "proj_test",
 		WithBaseURL("http://localhost:0"),
 		withMetadataSyncDisabled(),
 		withSSEDisabled(),
 	)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()

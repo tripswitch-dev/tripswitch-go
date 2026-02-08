@@ -59,16 +59,15 @@ func TestMetadataSync_InitialFetch(t *testing.T) {
 	server := cacheTestServer(t, bHandler, rHandler)
 	defer server.Close()
 
-	ts := NewClient("proj_123",
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ts, err := NewClient(ctx, "proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
 		WithMetadataSyncInterval(time.Hour), // large interval so only initial fetch runs
 	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := ts.Ready(ctx); err != nil {
-		t.Fatalf("ready: %v", err)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
 	}
 
 	// Give metadata sync goroutine time to complete initial fetch
@@ -118,15 +117,16 @@ func TestMetadataSync_Refresh(t *testing.T) {
 	server := cacheTestServer(t, bHandler, rHandler)
 	defer server.Close()
 
-	ts := NewClient("proj_123",
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ts, err := NewClient(ctx, "proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
 		WithMetadataSyncInterval(100*time.Millisecond),
 	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	ts.Ready(ctx)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 
 	// Wait for at least one refresh cycle
 	time.Sleep(400 * time.Millisecond)
@@ -163,15 +163,16 @@ func TestMetadataSync_NotModified(t *testing.T) {
 	server := cacheTestServer(t, bHandler, rHandler)
 	defer server.Close()
 
-	ts := NewClient("proj_123",
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ts, err := NewClient(ctx, "proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
 		WithMetadataSyncInterval(100*time.Millisecond),
 	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	ts.Ready(ctx)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 
 	// Wait for refresh
 	time.Sleep(300 * time.Millisecond)
@@ -197,15 +198,16 @@ func TestMetadataSync_InitFailure(t *testing.T) {
 	server := cacheTestServer(t, bHandler, rHandler)
 	defer server.Close()
 
-	ts := NewClient("proj_123",
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ts, err := NewClient(ctx, "proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
 		WithMetadataSyncInterval(time.Hour),
 	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	ts.Ready(ctx)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 
 	// Give initial fetch time to complete (and fail)
 	time.Sleep(200 * time.Millisecond)
@@ -240,15 +242,16 @@ func TestMetadataSync_AuthFailure(t *testing.T) {
 	server := cacheTestServer(t, bHandler, rHandler)
 	defer server.Close()
 
-	ts := NewClient("proj_123",
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ts, err := NewClient(ctx, "proj_123",
 		WithAPIKey("eb_pk_bad"),
 		WithBaseURL(server.URL),
 		WithMetadataSyncInterval(50*time.Millisecond),
 	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	ts.Ready(ctx)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 
 	// Give initial fetch time to complete and fail
 	time.Sleep(100 * time.Millisecond)
@@ -276,10 +279,13 @@ func TestGetBreakersMetadata_Empty(t *testing.T) {
 	server := cacheTestServer(t, nil, nil)
 	defer server.Close()
 
-	ts := NewClient("proj_123",
+	ts, err := NewClient(context.Background(), "proj_123",
 		WithBaseURL(server.URL),
 		withMetadataSyncDisabled(),
 	)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 
 	// No sync running — cache should be empty
 	breakers := ts.GetBreakersMetadata()
@@ -312,15 +318,16 @@ func TestMetadataSync_Shutdown(t *testing.T) {
 	server := cacheTestServer(t, bHandler, rHandler)
 	defer server.Close()
 
-	ts := NewClient("proj_123",
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ts, err := NewClient(ctx, "proj_123",
 		WithAPIKey("eb_pk_test"),
 		WithBaseURL(server.URL),
 		WithMetadataSyncInterval(50*time.Millisecond),
 	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	ts.Ready(ctx)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
 
 	// Let a few refreshes happen
 	time.Sleep(200 * time.Millisecond)

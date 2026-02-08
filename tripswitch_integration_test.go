@@ -68,23 +68,21 @@ func loadTestConfig(t *testing.T) testConfig {
 	return cfg
 }
 
-func TestIntegration_Ready(t *testing.T) {
+func TestIntegration_NewClient(t *testing.T) {
 	cfg := skipIfNoEnv(t)
-
-	client := NewClient(cfg.projectID,
-		WithAPIKey(cfg.apiKey),
-		WithIngestSecret(cfg.ingestSecret),
-		WithBaseURL(cfg.baseURL),
-	)
-	defer client.Close(context.Background())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := client.Ready(ctx)
+	client, err := NewClient(ctx, cfg.projectID,
+		WithAPIKey(cfg.apiKey),
+		WithIngestSecret(cfg.ingestSecret),
+		WithBaseURL(cfg.baseURL),
+	)
 	if err != nil {
-		t.Fatalf("Ready failed: %v", err)
+		t.Fatalf("NewClient failed: %v", err)
 	}
+	defer client.Close(context.Background())
 
 	t.Log("SSE connection established and ready")
 }
@@ -92,20 +90,18 @@ func TestIntegration_Ready(t *testing.T) {
 func TestIntegration_Execute(t *testing.T) {
 	cfg := skipIfNoEnv(t)
 
-	client := NewClient(cfg.projectID,
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := NewClient(ctx, cfg.projectID,
 		WithAPIKey(cfg.apiKey),
 		WithIngestSecret(cfg.ingestSecret),
 		WithBaseURL(cfg.baseURL),
 	)
-	defer client.Close(context.Background())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Wait for SSE to be ready
-	if err := client.Ready(ctx); err != nil {
-		t.Fatalf("Ready failed: %v", err)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
 	}
+	defer client.Close(context.Background())
 
 	// Execute a simple task using the configured breaker
 	result, err := Execute(client, ctx, func() (string, error) {
@@ -130,20 +126,18 @@ func TestIntegration_Execute(t *testing.T) {
 func TestIntegration_Stats(t *testing.T) {
 	cfg := skipIfNoEnv(t)
 
-	client := NewClient(cfg.projectID,
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := NewClient(ctx, cfg.projectID,
 		WithAPIKey(cfg.apiKey),
 		WithIngestSecret(cfg.ingestSecret),
 		WithBaseURL(cfg.baseURL),
 	)
-	defer client.Close(context.Background())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Wait for SSE to be ready
-	if err := client.Ready(ctx); err != nil {
-		t.Fatalf("Ready failed: %v", err)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
 	}
+	defer client.Close(context.Background())
 
 	stats := client.Stats()
 	if !stats.SSEConnected {
@@ -157,18 +151,16 @@ func TestIntegration_Stats(t *testing.T) {
 func TestIntegration_GracefulShutdown(t *testing.T) {
 	cfg := skipIfNoEnv(t)
 
-	client := NewClient(cfg.projectID,
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := NewClient(ctx, cfg.projectID,
 		WithAPIKey(cfg.apiKey),
 		WithIngestSecret(cfg.ingestSecret),
 		WithBaseURL(cfg.baseURL),
 	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Wait for SSE to be ready
-	if err := client.Ready(ctx); err != nil {
-		t.Fatalf("Ready failed: %v", err)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	// Execute a few tasks to generate samples
@@ -193,18 +185,21 @@ func TestIntegration_GracefulShutdown(t *testing.T) {
 func TestIntegration_GetStatus(t *testing.T) {
 	cfg := skipIfNoEnv(t)
 
-	client := NewClient(cfg.projectID,
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := NewClient(ctx, cfg.projectID,
 		WithAPIKey(cfg.apiKey),
 		WithBaseURL(cfg.baseURL),
 	)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		client.Close(ctx)
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		client.Close(closeCtx)
 	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
 	status, err := client.GetStatus(ctx)
 	if err != nil {
@@ -217,24 +212,22 @@ func TestIntegration_GetStatus(t *testing.T) {
 func TestIntegration_MetadataSync(t *testing.T) {
 	cfg := loadTestConfig(t)
 
-	client := NewClient(cfg.projectID,
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := NewClient(ctx, cfg.projectID,
 		WithAPIKey(cfg.apiKey),
 		WithBaseURL(cfg.baseURL),
 		WithMetadataSyncInterval(5*time.Second), // faster refresh for testing
 	)
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		client.Close(ctx)
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Wait for SSE to be ready (metadata sync runs in parallel)
-	if err := client.Ready(ctx); err != nil {
-		t.Fatalf("Ready failed: %v", err)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
 	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		client.Close(closeCtx)
+	}()
 
 	// Give metadata sync time to complete initial fetch
 	time.Sleep(500 * time.Millisecond)
