@@ -2,11 +2,11 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/tripswitch-dev/tripswitch-go.svg)](https://pkg.go.dev/github.com/tripswitch-dev/tripswitch-go)
 [![Go Report Card](https://goreportcard.com/badge/github.com/tripswitch-dev/tripswitch-go)](https://goreportcard.com/report/github.com/tripswitch-dev/tripswitch-go)
-[![Version](https://img.shields.io/badge/version-v0.7.1-blue)](https://github.com/tripswitch-dev/tripswitch-go/releases/tag/v0.7.1)
+[![Version](https://img.shields.io/badge/version-v0.9.0-blue)](https://github.com/tripswitch-dev/tripswitch-go/releases/tag/v0.9.0)
 
 Official Go client SDK for [Tripswitch](https://tripswitch.dev) - a circuit breaker management service.
 
-> **v0.7.0 Breaking Changes:** `WithMetric(key, value)` has been removed in favor of `WithMetrics(map[string]any{...})`. See [Migration](#migration-to-v070) for details.
+> **v0.9.0 Breaking Changes:** `NewClient` now accepts a `context.Context` and returns `(*Client, error)`. The `Ready` method has been removed — initialization blocking is handled by `NewClient`. See [Migration](#migration) for details.
 
 This SDK conforms to the [Tripswitch SDK Contract v0.2](https://tripswitch.dev/docs/sdk-contract).
 
@@ -40,7 +40,7 @@ For SDK initialization, you need two credentials from **Project Settings → SDK
 | **Ingest Secret** | `ik_` | HMAC-signed sample ingestion |
 
 ```go
-ts := tripswitch.NewClient("proj_abc123",
+ts, err := tripswitch.NewClient(ctx, "proj_abc123",
     tripswitch.WithAPIKey("eb_pk_..."),    // Project key
     tripswitch.WithIngestKey("ik_..."),    // Ingest secret
 )
@@ -71,19 +71,17 @@ import (
 )
 
 func main() {
-    // Create client
-    ts := tripswitch.NewClient("proj_abc123",
+    // Create client (blocks until SSE state sync completes)
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+    ts, err := tripswitch.NewClient(ctx, "proj_abc123",
         tripswitch.WithAPIKey("eb_pk_..."),
         tripswitch.WithIngestKey("ik_..."),
     )
-    defer ts.Close(context.Background())
-
-    // Wait for initial state sync before taking traffic
-    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-    defer cancel()
-    if err := ts.Ready(ctx); err != nil {
+    if err != nil {
         log.Fatal("tripswitch failed to initialize:", err)
     }
+    defer ts.Close(context.Background())
 
     // Wrap operations with circuit breaker
     resp, err := tripswitch.Execute(ts, ctx, func() (*http.Response, error) {
@@ -190,10 +188,10 @@ If both are set, `WithTraceID` wins.
 ### NewClient
 
 ```go
-func NewClient(projectID string, opts ...Option) *Client
+func NewClient(ctx context.Context, projectID string, opts ...Option) (*Client, error)
 ```
 
-Creates a new Tripswitch client. Automatically starts background goroutines for SSE state sync and sample flushing.
+Creates a new Tripswitch client. Starts background goroutines for SSE state sync and sample flushing, and blocks until the initial SSE sync completes (when an API key is configured). The context controls how long to wait for initialization. Returns an error if the context expires before sync completes.
 
 ### Execute
 
@@ -218,14 +216,6 @@ var Latency = &latencyMarker{}
 ```
 
 Sentinel value for `WithMetrics` that instructs the SDK to automatically compute and report task duration in milliseconds.
-
-### Ready
-
-```go
-func (c *Client) Ready(ctx context.Context) error
-```
-
-Blocks until the initial SSE handshake completes and breaker state is synced. Use this to ensure your app doesn't take traffic before state is known.
 
 ### Close
 
@@ -505,28 +495,48 @@ breaker, err := client.CreateBreaker(ctx, "proj_abc123", admin.CreateBreakerInpu
 
 **Note:** Admin keys (`eb_admin_`) are for management operations only. For runtime SDK usage, use project keys (`eb_pk_`) as shown in [Quick Start](#quick-start).
 
-## Migration to v0.7.0
+## Migration
 
-`WithMetric` has been removed. Use `WithMetrics` with a map instead:
+### v0.9.0: Synchronous `NewClient`
+
+`NewClient` now takes a `context.Context`, blocks until SSE state sync completes, and returns `(*Client, error)`. The `Ready` method has been removed.
+
+```go
+// Before (v0.8.x)
+ts := tripswitch.NewClient("proj_abc123",
+    tripswitch.WithAPIKey("eb_pk_..."),
+    tripswitch.WithIngestKey("ik_..."),
+)
+defer ts.Close(context.Background())
+if err := ts.Ready(ctx); err != nil {
+    log.Fatal(err)
+}
+
+// After (v0.9.0)
+ts, err := tripswitch.NewClient(ctx, "proj_abc123",
+    tripswitch.WithAPIKey("eb_pk_..."),
+    tripswitch.WithIngestKey("ik_..."),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer ts.Close(context.Background())
+```
+
+### v0.7.0: `WithMetrics` map API
+
+`WithMetric` was removed in favor of `WithMetrics` with a map:
 
 ```go
 // Before (v0.6.0)
-tripswitch.Execute(c, ctx, task,
-    tripswitch.WithBreakers("my-breaker"),
-    tripswitch.WithRouter("router-id"),
-    tripswitch.WithMetric("latency", tripswitch.Latency),
-    tripswitch.WithMetric("count", 1),
-)
+tripswitch.WithMetric("latency", tripswitch.Latency),
+tripswitch.WithMetric("count", 1),
 
 // After (v0.7.0)
-tripswitch.Execute(c, ctx, task,
-    tripswitch.WithBreakers("my-breaker"),
-    tripswitch.WithRouter("router-id"),
-    tripswitch.WithMetrics(map[string]any{
-        "latency": tripswitch.Latency,
-        "count":   1,
-    }),
-)
+tripswitch.WithMetrics(map[string]any{
+    "latency": tripswitch.Latency,
+    "count":   1,
+})
 ```
 
 ## Contributing

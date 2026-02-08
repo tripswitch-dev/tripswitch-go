@@ -22,7 +22,9 @@ type User struct {
 
 func main() {
 	// Create Tripswitch client with global tags
-	ts := tripswitch.NewClient("proj_abc123",
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ts, err := tripswitch.NewClient(ctx, "proj_abc123",
 		tripswitch.WithAPIKey("eb_pk_..."),
 		tripswitch.WithIngestSecret("..."), // 64-char hex string
 		// Global tags applied to ALL samples
@@ -32,14 +34,10 @@ func main() {
 			"region":  os.Getenv("AWS_REGION"),
 		}),
 	)
-	defer ts.Close(context.Background())
-
-	// Wait for initial state sync
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := ts.Ready(ctx); err != nil {
+	if err != nil {
 		log.Fatal("tripswitch failed to initialize:", err)
 	}
+	defer ts.Close(context.Background())
 
 	// Configuration (get these values from your breaker config via API or dashboard)
 	const (

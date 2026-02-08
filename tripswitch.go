@@ -15,16 +15,14 @@
 //
 // # Quick Start
 //
-//	ts := tripswitch.NewClient("proj_abc123",
+//	ts, err := tripswitch.NewClient(ctx, "proj_abc123",
 //	    tripswitch.WithAPIKey("eb_pk_..."),   // project key for SSE
 //	    tripswitch.WithIngestSecret("..."),   // 64-char hex string for HMAC
 //	)
-//	defer ts.Close(context.Background())
-//
-//	// Wait for state sync before taking traffic
-//	if err := ts.Ready(ctx); err != nil {
+//	if err != nil {
 //	    log.Fatal(err)
 //	}
+//	defer ts.Close(context.Background())
 //
 //	// Wrap operations with circuit breaker
 //	resp, err := tripswitch.Execute(ts, ctx, func() (*http.Response, error) {
@@ -177,13 +175,20 @@ type Client struct {
 	metaSyncInterval time.Duration
 	metaSyncDisabled bool
 	sseDisabled      bool
+	flusherDisabled  bool
 }
 
 // Option is a functional option for configuring the client.
 type Option func(*Client)
 
-// NewClient creates a new tripswitch client.
-func NewClient(projectID string, opts ...Option) *Client {
+// NewClient creates a new tripswitch client. The provided context controls how
+// long to wait for the initial SSE state sync. If an API key is configured, the
+// client blocks until the first SSE event is received or the context expires.
+// If no API key is set (or SSE is disabled), the client returns immediately.
+//
+// The context governs initialization only — the client's internal lifetime is
+// managed separately and is terminated by [Client.Close].
+func NewClient(ctx context.Context, projectID string, opts ...Option) (*Client, error) {
 	// Default client
 	c := &Client{
 		projectID:     projectID,
@@ -205,15 +210,37 @@ func NewClient(projectID string, opts ...Option) *Client {
 	c.sseEventURL = c.baseURL + "/v1/projects/" + c.projectID + "/breakers/state:stream"
 
 	if !c.sseDisabled {
+		c.wg.Add(1)
 		go c.startSSEListener()
 	}
-	go c.startFlusher()
+	if !c.flusherDisabled {
+		c.wg.Add(1)
+		go c.startFlusher()
+	}
 	if !c.metaSyncDisabled {
 		c.wg.Add(1)
 		go c.startMetadataSync()
 	}
 
-	return c
+	// Wait for SSE readiness if an API key is configured and SSE is enabled.
+	// Without an API key the SSE listener is still started but won't connect,
+	// so there's nothing to wait for.
+	if c.apiKey != "" && !c.sseDisabled {
+		select {
+		case <-c.sseReady:
+			// Initial state sync complete.
+		case <-ctx.Done():
+			// Signal goroutines to stop. We intentionally don't call c.wg.Wait()
+			// here because the SSE library's backoff retry loop does not respond
+			// to context cancellation during its sleep interval, which can block
+			// for seconds. The goroutines will stop on their own once they observe
+			// the cancelled context on the next retry cycle.
+			c.cancel()
+			return nil, fmt.Errorf("tripswitch: initialization timed out: %w", ctx.Err())
+		}
+	}
+
+	return c, nil
 }
 
 // Logger interface - compatible with slog.Logger
@@ -378,6 +405,14 @@ func withMetadataSyncDisabled() Option {
 func withSSEDisabled() Option {
 	return func(c *Client) {
 		c.sseDisabled = true
+	}
+}
+
+// withFlusherDisabled disables the background flusher goroutine.
+// This is intended for tests that read directly from reportChan.
+func withFlusherDisabled() Option {
+	return func(c *Client) {
+		c.flusherDisabled = true
 	}
 }
 
@@ -743,7 +778,6 @@ type sseBreakerEvent struct {
 // startSSEListener connects to the SSE endpoint, listens for breaker state changes,
 // and updates the local cache. It handles reconnections and ensures graceful shutdown.
 func (c *Client) startSSEListener() {
-	c.wg.Add(1)
 	defer c.wg.Done()
 
 	c.sseClient = sse.NewClient(c.sseEventURL)
@@ -824,16 +858,6 @@ func (c *Client) updateBreakerState(name, newState string, allowRate float64) {
 	// Invoke callback if state changed and it's set
 	if oldState != "" && oldState != newState && c.onStateChange != nil {
 		c.onStateChange(name, oldState, newState)
-	}
-}
-
-// Ready blocks until the initial SSE handshake completes and state is synced.
-func (c *Client) Ready(ctx context.Context) error {
-	select {
-	case <-c.sseReady:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 }
 
@@ -1058,7 +1082,6 @@ func (c *Client) report(entry reportEntry) {
 
 // startFlusher runs the background batch flusher.
 func (c *Client) startFlusher() {
-	c.wg.Add(1)
 	defer c.wg.Done()
 
 	batch := make([]reportEntry, 0, 500)
