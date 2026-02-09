@@ -2075,3 +2075,69 @@ func TestGetAllStates(t *testing.T) {
 		t.Errorf("unexpected shipping state: %+v", shipping)
 	}
 }
+
+func TestSSE_NullAllowRate_HalfOpen(t *testing.T) {
+	logger := &mockLogger{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		// Send half_open event with null allow_rate (server bug scenario)
+		fmt.Fprintf(w, "data: {\"breaker\": \"payment-error-rate\", \"state\": \"half_open\", \"allow_rate\": null}\n\n")
+		flusher.Flush()
+
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(2 * time.Second):
+			return
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client, err := NewClient(ctx, "proj_test",
+		WithAPIKey("eb_pk_test"),
+		WithBaseURL(server.URL),
+		WithLogger(logger),
+		withMetadataSyncDisabled(),
+	)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		client.Close(closeCtx)
+	}()
+
+	// State is guaranteed written before sseReady is closed, so no race here —
+	// NewClient blocks on sseReady when an API key is set.
+	client.breakerStatesMu.RLock()
+	state, ok := client.breakerStates["payment-error-rate"]
+	client.breakerStatesMu.RUnlock()
+
+	if !ok {
+		t.Fatal("expected payment-error-rate in breaker states")
+	}
+	if state.State != "half_open" {
+		t.Errorf("expected state=half_open, got %s", state.State)
+	}
+	// null allow_rate unmarshals to 0.0 — SDK must not invent a value
+	if state.AllowRate != 0.0 {
+		t.Errorf("expected AllowRate=0.0, got %f", state.AllowRate)
+	}
+	if !logger.HasWarn("SSE event has null allow_rate for half_open breaker") {
+		t.Error("expected warning about null allow_rate for half_open breaker")
+	}
+}

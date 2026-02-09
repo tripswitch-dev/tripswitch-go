@@ -770,9 +770,9 @@ func (c *Client) Close(ctx context.Context) error {
 
 // sseBreakerEvent represents the JSON payload of an SSE event for a breaker state change.
 type sseBreakerEvent struct {
-	Breaker   string  `json:"breaker"`
-	State     string  `json:"state"`
-	AllowRate float64 `json:"allow_rate"`
+	Breaker   string   `json:"breaker"`
+	State     string   `json:"state"`
+	AllowRate *float64 `json:"allow_rate"`
 }
 
 // startSSEListener connects to the SSE endpoint, listens for breaker state changes,
@@ -804,7 +804,16 @@ func (c *Client) startSSEListener() {
 			c.logger.Error("failed to unmarshal SSE event", "error", err, "data", string(msg.Data))
 			return
 		}
-		c.updateBreakerState(event.Breaker, event.State, event.AllowRate)
+
+		allowRate := 0.0
+		if event.AllowRate != nil {
+			allowRate = *event.AllowRate
+		} else if event.State == "half_open" {
+			// Only warn for half_open — allow_rate is meaningless for open (always blocked)
+			// and closed (always allowed), so null is harmless for those states.
+			c.logger.Warn("SSE event has null allow_rate for half_open breaker", "breaker", event.Breaker)
+		}
+		c.updateBreakerState(event.Breaker, event.State, allowRate)
 
 		// Mark SSE as connected and record event time
 		c.stats.mu.Lock()
