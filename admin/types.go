@@ -116,53 +116,70 @@ const (
 
 // Breaker represents a circuit breaker configuration.
 type Breaker struct {
-	ID                 string            `json:"id"`
-	RouterID           string            `json:"router_id,omitempty"`
-	Name               string            `json:"name"`
-	Metric             string            `json:"metric"`
-	Kind               BreakerKind       `json:"kind"`
-	KindParams         map[string]any    `json:"kind_params,omitempty"`
-	Op                 BreakerOp         `json:"op"`
-	Threshold          float64           `json:"threshold"`
-	WindowMs           int               `json:"window_ms,omitempty"`
-	MinCount           int               `json:"min_count,omitempty"`
-	MinStateDurationMs int               `json:"min_state_duration_ms,omitempty"`
-	CooldownMs         int               `json:"cooldown_ms,omitempty"`
-	Actions            map[string]any    `json:"actions,omitempty"`
-	Metadata           map[string]string `json:"metadata,omitempty"`
+	ID                          string            `json:"id"`
+	RouterID                    string            `json:"router_id,omitempty"`
+	Name                        string            `json:"name"`
+	Metric                      string            `json:"metric"`
+	Kind                        BreakerKind       `json:"kind"`
+	KindParams                  map[string]any    `json:"kind_params,omitempty"`
+	Op                          BreakerOp         `json:"op"`
+	Threshold                   float64           `json:"threshold"`
+	WindowMs                    int               `json:"window_ms,omitempty"`
+	MinCount                    int               `json:"min_count,omitempty"`
+	MinStateDurationMs          int               `json:"min_state_duration_ms,omitempty"`
+	CooldownMs                      int               `json:"cooldown_ms,omitempty"`
+	EvalIntervalMs                  int               `json:"eval_interval_ms,omitempty"`
+	HalfOpenConfirmationMs          int               `json:"half_open_confirmation_ms,omitempty"`
+	HalfOpenBackoffEnabled          bool              `json:"half_open_backoff_enabled,omitempty"`
+	HalfOpenBackoffCapMs            int               `json:"half_open_backoff_cap_ms,omitempty"`
+	HalfOpenIndeterminatePolicy     HalfOpenPolicy    `json:"half_open_indeterminate_policy,omitempty"`
+	RecoveryWindowMs                int               `json:"recovery_window_ms,omitempty"`
+	RecoveryAllowRateRampSteps      int               `json:"recovery_allow_rate_ramp_steps,omitempty"`
+	Actions                         map[string]any    `json:"actions,omitempty"`
+	Metadata                        map[string]string `json:"metadata,omitempty"`
 }
 
 // CreateBreakerInput contains fields for creating a breaker.
 type CreateBreakerInput struct {
-	Name               string         `json:"name"`
-	Metric             string         `json:"metric"`
-	Kind               BreakerKind    `json:"kind"`
-	KindParams         map[string]any `json:"kind_params,omitempty"`
-	Op                 BreakerOp      `json:"op"`
-	Threshold          float64        `json:"threshold"`
-	WindowMs           int            `json:"window_ms,omitempty"`
-	MinCount           int            `json:"min_count,omitempty"`
-	MinStateDurationMs int            `json:"min_state_duration_ms,omitempty"`
-	CooldownMs         int            `json:"cooldown_ms,omitempty"`
-	Actions            map[string]any `json:"actions,omitempty"`
-	Metadata           map[string]string `json:"metadata,omitempty"`
+	Name                        string            `json:"name"`
+	Metric                      string            `json:"metric"`
+	Kind                        BreakerKind       `json:"kind"`
+	KindParams                  map[string]any    `json:"kind_params,omitempty"`
+	Op                          BreakerOp         `json:"op"`
+	Threshold                   float64           `json:"threshold"`
+	WindowMs                    int               `json:"window_ms,omitempty"`
+	MinCount                    int               `json:"min_count,omitempty"`
+	MinStateDurationMs          int               `json:"min_state_duration_ms,omitempty"`
+	CooldownMs                      int               `json:"cooldown_ms,omitempty"`
+	EvalIntervalMs                  int               `json:"eval_interval_ms,omitempty"`
+	HalfOpenBackoffEnabled          bool              `json:"half_open_backoff_enabled,omitempty"`
+	HalfOpenBackoffCapMs            int               `json:"half_open_backoff_cap_ms,omitempty"`
+	HalfOpenIndeterminatePolicy     HalfOpenPolicy    `json:"half_open_indeterminate_policy,omitempty"`
+	RecoveryAllowRateRampSteps      int               `json:"recovery_allow_rate_ramp_steps,omitempty"`
+	Actions                         map[string]any    `json:"actions,omitempty"`
+	Metadata                        map[string]string `json:"metadata,omitempty"`
 }
 
 // UpdateBreakerInput contains fields for updating a breaker.
 // Use Ptr() to set optional fields.
 type UpdateBreakerInput struct {
-	Name               *string         `json:"name,omitempty"`
-	Metric             *string         `json:"metric,omitempty"`
-	Kind               *BreakerKind    `json:"kind,omitempty"`
-	KindParams         map[string]any  `json:"kind_params,omitempty"`
-	Op                 *BreakerOp      `json:"op,omitempty"`
-	Threshold          *float64        `json:"threshold,omitempty"`
-	WindowMs           *int            `json:"window_ms,omitempty"`
-	MinCount           *int            `json:"min_count,omitempty"`
-	MinStateDurationMs *int            `json:"min_state_duration_ms,omitempty"`
-	CooldownMs         *int            `json:"cooldown_ms,omitempty"`
-	Actions            map[string]any  `json:"actions,omitempty"`
-	Metadata           map[string]string `json:"metadata,omitempty"`
+	Name                        *string           `json:"name,omitempty"`
+	Metric                      *string           `json:"metric,omitempty"`
+	Kind                        *BreakerKind      `json:"kind,omitempty"`
+	KindParams                  map[string]any    `json:"kind_params,omitempty"`
+	Op                          *BreakerOp        `json:"op,omitempty"`
+	Threshold                   *float64          `json:"threshold,omitempty"`
+	WindowMs                    *int              `json:"window_ms,omitempty"`
+	MinCount                    *int              `json:"min_count,omitempty"`
+	MinStateDurationMs          *int              `json:"min_state_duration_ms,omitempty"`
+	CooldownMs                      *int              `json:"cooldown_ms,omitempty"`
+	EvalIntervalMs                  *int              `json:"eval_interval_ms,omitempty"`
+	HalfOpenBackoffEnabled          *bool             `json:"half_open_backoff_enabled,omitempty"`
+	HalfOpenBackoffCapMs            *int              `json:"half_open_backoff_cap_ms,omitempty"`
+	HalfOpenIndeterminatePolicy     *HalfOpenPolicy   `json:"half_open_indeterminate_policy,omitempty"`
+	RecoveryAllowRateRampSteps      *int              `json:"recovery_allow_rate_ramp_steps,omitempty"`
+	Actions                         map[string]any    `json:"actions,omitempty"`
+	Metadata                        map[string]string `json:"metadata,omitempty"`
 }
 
 // SyncBreakersInput contains a list of breakers for bulk sync.
