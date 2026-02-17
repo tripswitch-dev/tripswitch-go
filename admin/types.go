@@ -127,12 +127,16 @@ type Breaker struct {
 	WindowMs                    int               `json:"window_ms,omitempty"`
 	MinCount                    int               `json:"min_count,omitempty"`
 	MinStateDurationMs          int               `json:"min_state_duration_ms,omitempty"`
-	CooldownMs                  int               `json:"cooldown_ms,omitempty"`
-	HalfOpenConfirmationMs      int               `json:"half_open_confirmation_ms,omitempty"`
-	RecoveryWindowMs            int               `json:"recovery_window_ms,omitempty"`
-	RecoveryAllowRateRampSteps  int               `json:"recovery_allow_rate_ramp_steps,omitempty"`
-	Actions                     map[string]any    `json:"actions,omitempty"`
-	Metadata                    map[string]string `json:"metadata,omitempty"`
+	CooldownMs                      int               `json:"cooldown_ms,omitempty"`
+	EvalIntervalMs                  int               `json:"eval_interval_ms,omitempty"`
+	HalfOpenConfirmationMs          int               `json:"half_open_confirmation_ms,omitempty"`
+	HalfOpenBackoffEnabled          bool              `json:"half_open_backoff_enabled,omitempty"`
+	HalfOpenBackoffCapMs            int               `json:"half_open_backoff_cap_ms,omitempty"`
+	HalfOpenIndeterminatePolicy     HalfOpenPolicy    `json:"half_open_indeterminate_policy,omitempty"`
+	RecoveryWindowMs                int               `json:"recovery_window_ms,omitempty"`
+	RecoveryAllowRateRampSteps      int               `json:"recovery_allow_rate_ramp_steps,omitempty"`
+	Actions                         map[string]any    `json:"actions,omitempty"`
+	Metadata                        map[string]string `json:"metadata,omitempty"`
 }
 
 // CreateBreakerInput contains fields for creating a breaker.
@@ -146,10 +150,14 @@ type CreateBreakerInput struct {
 	WindowMs                    int               `json:"window_ms,omitempty"`
 	MinCount                    int               `json:"min_count,omitempty"`
 	MinStateDurationMs          int               `json:"min_state_duration_ms,omitempty"`
-	CooldownMs                  int               `json:"cooldown_ms,omitempty"`
-	RecoveryAllowRateRampSteps  int               `json:"recovery_allow_rate_ramp_steps,omitempty"`
-	Actions                     map[string]any    `json:"actions,omitempty"`
-	Metadata                    map[string]string `json:"metadata,omitempty"`
+	CooldownMs                      int               `json:"cooldown_ms,omitempty"`
+	EvalIntervalMs                  int               `json:"eval_interval_ms,omitempty"`
+	HalfOpenBackoffEnabled          bool              `json:"half_open_backoff_enabled,omitempty"`
+	HalfOpenBackoffCapMs            int               `json:"half_open_backoff_cap_ms,omitempty"`
+	HalfOpenIndeterminatePolicy     HalfOpenPolicy    `json:"half_open_indeterminate_policy,omitempty"`
+	RecoveryAllowRateRampSteps      int               `json:"recovery_allow_rate_ramp_steps,omitempty"`
+	Actions                         map[string]any    `json:"actions,omitempty"`
+	Metadata                        map[string]string `json:"metadata,omitempty"`
 }
 
 // UpdateBreakerInput contains fields for updating a breaker.
@@ -164,10 +172,14 @@ type UpdateBreakerInput struct {
 	WindowMs                    *int              `json:"window_ms,omitempty"`
 	MinCount                    *int              `json:"min_count,omitempty"`
 	MinStateDurationMs          *int              `json:"min_state_duration_ms,omitempty"`
-	CooldownMs                  *int              `json:"cooldown_ms,omitempty"`
-	RecoveryAllowRateRampSteps  *int              `json:"recovery_allow_rate_ramp_steps,omitempty"`
-	Actions                     map[string]any    `json:"actions,omitempty"`
-	Metadata                    map[string]string `json:"metadata,omitempty"`
+	CooldownMs                      *int              `json:"cooldown_ms,omitempty"`
+	EvalIntervalMs                  *int              `json:"eval_interval_ms,omitempty"`
+	HalfOpenBackoffEnabled          *bool             `json:"half_open_backoff_enabled,omitempty"`
+	HalfOpenBackoffCapMs            *int              `json:"half_open_backoff_cap_ms,omitempty"`
+	HalfOpenIndeterminatePolicy     *HalfOpenPolicy   `json:"half_open_indeterminate_policy,omitempty"`
+	RecoveryAllowRateRampSteps      *int              `json:"recovery_allow_rate_ramp_steps,omitempty"`
+	Actions                         map[string]any    `json:"actions,omitempty"`
+	Metadata                        map[string]string `json:"metadata,omitempty"`
 }
 
 // SyncBreakersInput contains a list of breakers for bulk sync.
