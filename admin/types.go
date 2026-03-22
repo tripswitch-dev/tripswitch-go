@@ -42,6 +42,11 @@ type UpdateWorkspaceInput struct {
 	Slug *string `json:"slug,omitempty"`
 }
 
+// ListWorkspacesResponse contains the response from listing workspaces.
+type ListWorkspacesResponse struct {
+	Workspaces []Workspace `json:"workspaces"`
+}
+
 // Project represents a Tripswitch project.
 type Project struct {
 	ID                  string `json:"project_id"`
@@ -60,7 +65,7 @@ type CreateProjectInput struct {
 
 // ListProjectsParams contains parameters for listing projects.
 type ListProjectsParams struct {
-	WorkspaceID string // optional filter
+	WorkspaceID string `json:"workspace_id,omitempty"`
 }
 
 // ListProjectsResponse contains the response from listing projects.

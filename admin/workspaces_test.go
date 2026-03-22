@@ -19,24 +19,26 @@ func TestListWorkspaces(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]Workspace{
-			{ID: "ws_1", Name: "workspace-one", Slug: "workspace-one", OrgID: "org_1"},
-			{ID: "ws_2", Name: "workspace-two", Slug: "workspace-two", OrgID: "org_1"},
+		json.NewEncoder(w).Encode(ListWorkspacesResponse{
+			Workspaces: []Workspace{
+				{ID: "ws_1", Name: "workspace-one", Slug: "workspace-one", OrgID: "org_1"},
+				{ID: "ws_2", Name: "workspace-two", Slug: "workspace-two", OrgID: "org_1"},
+			},
 		})
 	}))
 	defer server.Close()
 
 	client := NewClient(WithBaseURL(server.URL))
 
-	workspaces, err := client.ListWorkspaces(context.Background())
+	result, err := client.ListWorkspaces(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(workspaces) != 2 {
-		t.Errorf("expected 2 workspaces, got %d", len(workspaces))
+	if len(result.Workspaces) != 2 {
+		t.Errorf("expected 2 workspaces, got %d", len(result.Workspaces))
 	}
-	if workspaces[0].ID != "ws_1" {
-		t.Errorf("expected ID 'ws_1', got %q", workspaces[0].ID)
+	if result.Workspaces[0].ID != "ws_1" {
+		t.Errorf("expected ID 'ws_1', got %q", result.Workspaces[0].ID)
 	}
 }
 

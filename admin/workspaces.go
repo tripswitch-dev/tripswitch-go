@@ -6,8 +6,8 @@ import (
 )
 
 // ListWorkspaces retrieves all workspaces for the authenticated org.
-func (c *Client) ListWorkspaces(ctx context.Context, opts ...RequestOption) ([]Workspace, error) {
-	var result []Workspace
+func (c *Client) ListWorkspaces(ctx context.Context, opts ...RequestOption) (*ListWorkspacesResponse, error) {
+	var result ListWorkspacesResponse
 	err := c.do(ctx, request{
 		method:  http.MethodGet,
 		path:    "/v1/workspaces",
@@ -16,7 +16,7 @@ func (c *Client) ListWorkspaces(ctx context.Context, opts ...RequestOption) ([]W
 	if err != nil {
 		return nil, err
 	}
-	return result, nil
+	return &result, nil
 }
 
 // CreateWorkspace creates a new workspace.
