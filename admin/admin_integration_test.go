@@ -14,10 +14,12 @@ import (
 //
 // Optional:
 //   TRIPSWITCH_BASE_URL=https://api.tripswitch.dev (defaults to production)
+//   TRIPSWITCH_WORKSPACE_ID=ws_... (required for ProjectCRUD test)
 
-func skipIfNoEnv(t *testing.T) (apiKey, projectID, baseURL string) {
+func skipIfNoEnv(t *testing.T) (apiKey, projectID, baseURL, workspaceID string) {
 	apiKey = os.Getenv("TRIPSWITCH_API_KEY")
 	projectID = os.Getenv("TRIPSWITCH_PROJECT_ID")
+	workspaceID = os.Getenv("TRIPSWITCH_WORKSPACE_ID")
 	baseURL = os.Getenv("TRIPSWITCH_BASE_URL")
 
 	if apiKey == "" || projectID == "" {
@@ -28,11 +30,11 @@ func skipIfNoEnv(t *testing.T) (apiKey, projectID, baseURL string) {
 		baseURL = "https://api.tripswitch.dev"
 	}
 
-	return apiKey, projectID, baseURL
+	return apiKey, projectID, baseURL, workspaceID
 }
 
 func TestIntegration_GetProject(t *testing.T) {
-	apiKey, projectID, baseURL := skipIfNoEnv(t)
+	apiKey, projectID, baseURL, _ := skipIfNoEnv(t)
 
 	client := NewClient(
 		WithAPIKey(apiKey),
@@ -55,7 +57,11 @@ func TestIntegration_GetProject(t *testing.T) {
 }
 
 func TestIntegration_ProjectCRUD(t *testing.T) {
-	apiKey, _, baseURL := skipIfNoEnv(t)
+	apiKey, _, baseURL, workspaceID := skipIfNoEnv(t)
+
+	if workspaceID == "" {
+		t.Skip("Skipping: TRIPSWITCH_WORKSPACE_ID must be set for project CRUD tests")
+	}
 
 	client := NewClient(
 		WithAPIKey(apiKey),
@@ -69,7 +75,8 @@ func TestIntegration_ProjectCRUD(t *testing.T) {
 
 	// Create
 	project, err := client.CreateProject(ctx, CreateProjectInput{
-		Name: projectName,
+		WorkspaceID: workspaceID,
+		Name:        projectName,
 	})
 	if err != nil {
 		t.Fatalf("CreateProject failed: %v", err)
@@ -119,7 +126,7 @@ func TestIntegration_ProjectCRUD(t *testing.T) {
 }
 
 func TestIntegration_ListBreakers(t *testing.T) {
-	apiKey, projectID, baseURL := skipIfNoEnv(t)
+	apiKey, projectID, baseURL, _ := skipIfNoEnv(t)
 
 	client := NewClient(
 		WithAPIKey(apiKey),
@@ -144,7 +151,7 @@ func TestIntegration_ListBreakers(t *testing.T) {
 // because it requires a project API key (eb_pk_), not an admin key.
 
 func TestIntegration_BreakerCRUD(t *testing.T) {
-	apiKey, projectID, baseURL := skipIfNoEnv(t)
+	apiKey, projectID, baseURL, _ := skipIfNoEnv(t)
 
 	client := NewClient(
 		WithAPIKey(apiKey),
@@ -210,7 +217,7 @@ func TestIntegration_BreakerCRUD(t *testing.T) {
 }
 
 func TestIntegration_ListRouters(t *testing.T) {
-	apiKey, projectID, baseURL := skipIfNoEnv(t)
+	apiKey, projectID, baseURL, _ := skipIfNoEnv(t)
 
 	client := NewClient(
 		WithAPIKey(apiKey),
@@ -232,7 +239,7 @@ func TestIntegration_ListRouters(t *testing.T) {
 }
 
 func TestIntegration_ListNotificationChannels(t *testing.T) {
-	apiKey, projectID, baseURL := skipIfNoEnv(t)
+	apiKey, projectID, baseURL, _ := skipIfNoEnv(t)
 
 	client := NewClient(
 		WithAPIKey(apiKey),
@@ -254,7 +261,7 @@ func TestIntegration_ListNotificationChannels(t *testing.T) {
 }
 
 func TestIntegration_ListEvents(t *testing.T) {
-	apiKey, projectID, baseURL := skipIfNoEnv(t)
+	apiKey, projectID, baseURL, _ := skipIfNoEnv(t)
 
 	client := NewClient(
 		WithAPIKey(apiKey),
