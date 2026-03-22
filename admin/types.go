@@ -20,9 +20,32 @@ type ListParams struct {
 	Limit  int    `json:"limit,omitempty"`
 }
 
+// Workspace represents a Tripswitch workspace.
+type Workspace struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Slug       string    `json:"slug"`
+	OrgID      string    `json:"org_id"`
+	InsertedAt time.Time `json:"inserted_at"`
+}
+
+// CreateWorkspaceInput contains fields for creating a workspace.
+type CreateWorkspaceInput struct {
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+}
+
+// UpdateWorkspaceInput contains fields for updating a workspace.
+// Use Ptr() to set optional fields.
+type UpdateWorkspaceInput struct {
+	Name *string `json:"name,omitempty"`
+	Slug *string `json:"slug,omitempty"`
+}
+
 // Project represents a Tripswitch project.
 type Project struct {
 	ID                  string `json:"project_id"`
+	WorkspaceID         string `json:"workspace_id"`
 	Name                string `json:"name"`
 	SlackWebhookURL     string `json:"slack_webhook_url,omitempty"`
 	TraceIDURLTemplate  string `json:"trace_id_url_template,omitempty"`
@@ -31,7 +54,13 @@ type Project struct {
 
 // CreateProjectInput contains fields for creating a project.
 type CreateProjectInput struct {
-	Name string `json:"name"`
+	WorkspaceID string `json:"workspace_id"`
+	Name        string `json:"name"`
+}
+
+// ListProjectsParams contains parameters for listing projects.
+type ListProjectsParams struct {
+	WorkspaceID string // optional filter
 }
 
 // ListProjectsResponse contains the response from listing projects.

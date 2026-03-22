@@ -86,7 +86,7 @@ func TestIntegration_ProjectCRUD(t *testing.T) {
 	})
 
 	// List
-	result, err := client.ListProjects(ctx)
+	result, err := client.ListProjects(ctx, ListProjectsParams{})
 	if err != nil {
 		t.Fatalf("ListProjects failed: %v", err)
 	}
