@@ -71,6 +71,7 @@ type ListProjectsParams struct {
 // ListProjectsResponse contains the response from listing projects.
 type ListProjectsResponse struct {
 	Projects []Project `json:"projects"`
+	Count    int       `json:"count"`
 }
 
 // DeleteProjectOption configures a DeleteProject call.
