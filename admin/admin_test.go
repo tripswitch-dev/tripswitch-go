@@ -644,7 +644,7 @@ func TestListProjects(t *testing.T) {
 
 	client := NewClient(WithBaseURL(server.URL))
 
-	result, err := client.ListProjects(context.Background())
+	result, err := client.ListProjects(context.Background(), ListProjectsParams{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 // ErrDeleteConfirmation is returned when DeleteProject is called without
@@ -12,11 +13,18 @@ import (
 var ErrDeleteConfirmation = errors.New("tripswitch: delete confirmation failed")
 
 // ListProjects retrieves all projects for the authenticated org.
-func (c *Client) ListProjects(ctx context.Context, opts ...RequestOption) (*ListProjectsResponse, error) {
+// Use params.WorkspaceID to filter by workspace.
+func (c *Client) ListProjects(ctx context.Context, params ListProjectsParams, opts ...RequestOption) (*ListProjectsResponse, error) {
+	query := url.Values{}
+	if params.WorkspaceID != "" {
+		query.Set("workspace_id", params.WorkspaceID)
+	}
+
 	var result ListProjectsResponse
 	err := c.do(ctx, request{
 		method:  http.MethodGet,
 		path:    "/v1/projects",
+		query:   query,
 		options: opts,
 	}, &result)
 	if err != nil {
