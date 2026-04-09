@@ -125,7 +125,7 @@ func TestCreateBreaker(t *testing.T) {
 				Name: input.Name,
 				Kind: input.Kind,
 			},
-			"router_id": "router_789",
+			"router_ids": []string{"router_789"},
 		})
 	}))
 	defer server.Close()
@@ -144,6 +144,9 @@ func TestCreateBreaker(t *testing.T) {
 	}
 	if breaker.ID != "breaker_456" {
 		t.Errorf("expected ID 'breaker_456', got %q", breaker.ID)
+	}
+	if len(breaker.RouterIDs) != 1 || breaker.RouterIDs[0] != "router_789" {
+		t.Errorf("expected RouterIDs [router_789], got %v", breaker.RouterIDs)
 	}
 }
 
@@ -800,7 +803,7 @@ func TestCreateBreakerWithMetadata(t *testing.T) {
 				Kind:     input.Kind,
 				Metadata: input.Metadata,
 			},
-			"router_id": "router_789",
+			"router_ids": []string{"router_789"},
 		})
 	}))
 	defer server.Close()
@@ -883,7 +886,7 @@ func TestUpdateBreakerWithMetadata(t *testing.T) {
 				Name:     "api-latency",
 				Metadata: input.Metadata,
 			},
-			"router_id": "router_789",
+			"router_ids": []string{"router_789"},
 		})
 	}))
 	defer server.Close()
@@ -918,7 +921,7 @@ func TestCreateBreakerWithNilMetadata(t *testing.T) {
 				ID:   "breaker_456",
 				Name: "api-latency",
 			},
-			"router_id": "router_789",
+			"router_ids": []string{"router_789"},
 		})
 	}))
 	defer server.Close()
