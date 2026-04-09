@@ -125,7 +125,7 @@ func TestCreateBreaker(t *testing.T) {
 				Name: input.Name,
 				Kind: input.Kind,
 			},
-			"router_id": "router_789",
+			"router_ids": []string{"router_789"},
 		})
 	}))
 	defer server.Close()
@@ -800,7 +800,7 @@ func TestCreateBreakerWithMetadata(t *testing.T) {
 				Kind:     input.Kind,
 				Metadata: input.Metadata,
 			},
-			"router_id": "router_789",
+			"router_ids": []string{"router_789"},
 		})
 	}))
 	defer server.Close()
@@ -883,7 +883,7 @@ func TestUpdateBreakerWithMetadata(t *testing.T) {
 				Name:     "api-latency",
 				Metadata: input.Metadata,
 			},
-			"router_id": "router_789",
+			"router_ids": []string{"router_789"},
 		})
 	}))
 	defer server.Close()
@@ -918,7 +918,7 @@ func TestCreateBreakerWithNilMetadata(t *testing.T) {
 				ID:   "breaker_456",
 				Name: "api-latency",
 			},
-			"router_id": "router_789",
+			"router_ids": []string{"router_789"},
 		})
 	}))
 	defer server.Close()

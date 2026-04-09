@@ -32,8 +32,8 @@ func (c *Client) ListBreakers(ctx context.Context, projectID string, params List
 
 // breakerResponse wraps single breaker responses from the API.
 type breakerResponse struct {
-	Breaker  Breaker `json:"breaker"`
-	RouterID string  `json:"router_id,omitempty"`
+	Breaker   Breaker  `json:"breaker"`
+	RouterIDs []string `json:"router_ids,omitempty"`
 }
 
 // CreateBreaker creates a new breaker.
@@ -48,8 +48,8 @@ func (c *Client) CreateBreaker(ctx context.Context, projectID string, input Crea
 	if err != nil {
 		return nil, err
 	}
-	// Copy router_id from wrapper to breaker
-	resp.Breaker.RouterID = resp.RouterID
+	// Copy router_ids from wrapper to breaker
+	resp.Breaker.RouterIDs = resp.RouterIDs
 	return &resp.Breaker, nil
 }
 
@@ -79,8 +79,8 @@ func (c *Client) GetBreaker(ctx context.Context, projectID, breakerID string, op
 	if err != nil {
 		return nil, err
 	}
-	// Copy router_id from wrapper to breaker
-	resp.Breaker.RouterID = resp.RouterID
+	// Copy router_ids from wrapper to breaker
+	resp.Breaker.RouterIDs = resp.RouterIDs
 	return &resp.Breaker, nil
 }
 
@@ -96,8 +96,8 @@ func (c *Client) UpdateBreaker(ctx context.Context, projectID, breakerID string,
 	if err != nil {
 		return nil, err
 	}
-	// Copy router_id from wrapper to breaker
-	resp.Breaker.RouterID = resp.RouterID
+	// Copy router_ids from wrapper to breaker
+	resp.Breaker.RouterIDs = resp.RouterIDs
 	return &resp.Breaker, nil
 }
 

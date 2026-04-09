@@ -49,12 +49,12 @@ type ListWorkspacesResponse struct {
 
 // Project represents a Tripswitch project.
 type Project struct {
-	ID                  string `json:"project_id"`
-	WorkspaceID         string `json:"workspace_id"`
-	Name                string `json:"name"`
-	SlackWebhookURL     string `json:"slack_webhook_url,omitempty"`
-	TraceIDURLTemplate  string `json:"trace_id_url_template,omitempty"`
-	EnableSignedIngest  bool   `json:"enable_signed_ingest"`
+	ID                 string `json:"project_id"`
+	WorkspaceID        string `json:"workspace_id"`
+	Name               string `json:"name"`
+	SlackWebhookURL    string `json:"slack_webhook_url,omitempty"`
+	TraceIDURLTemplate string `json:"trace_id_url_template,omitempty"`
+	EnableSignedIngest bool   `json:"enable_signed_ingest"`
 }
 
 // CreateProjectInput contains fields for creating a project.
@@ -152,7 +152,7 @@ const (
 // Breaker represents a circuit breaker configuration.
 type Breaker struct {
 	ID                          string            `json:"id"`
-	RouterID                    string            `json:"router_id,omitempty"`
+	RouterIDs                   []string          `json:"router_ids,omitempty"`
 	Name                        string            `json:"name"`
 	Metric                      string            `json:"metric"`
 	Kind                        BreakerKind       `json:"kind"`
@@ -162,16 +162,16 @@ type Breaker struct {
 	WindowMs                    int               `json:"window_ms,omitempty"`
 	MinCount                    int               `json:"min_count,omitempty"`
 	MinStateDurationMs          int               `json:"min_state_duration_ms,omitempty"`
-	CooldownMs                      int               `json:"cooldown_ms,omitempty"`
-	EvalIntervalMs                  int               `json:"eval_interval_ms,omitempty"`
-	HalfOpenConfirmationMs          int               `json:"half_open_confirmation_ms,omitempty"`
-	HalfOpenBackoffEnabled          bool              `json:"half_open_backoff_enabled,omitempty"`
-	HalfOpenBackoffCapMs            int               `json:"half_open_backoff_cap_ms,omitempty"`
-	HalfOpenIndeterminatePolicy     HalfOpenPolicy    `json:"half_open_indeterminate_policy,omitempty"`
-	RecoveryWindowMs                int               `json:"recovery_window_ms,omitempty"`
-	RecoveryAllowRateRampSteps      int               `json:"recovery_allow_rate_ramp_steps,omitempty"`
-	Actions                         map[string]any    `json:"actions,omitempty"`
-	Metadata                        map[string]string `json:"metadata,omitempty"`
+	CooldownMs                  int               `json:"cooldown_ms,omitempty"`
+	EvalIntervalMs              int               `json:"eval_interval_ms,omitempty"`
+	HalfOpenConfirmationMs      int               `json:"half_open_confirmation_ms,omitempty"`
+	HalfOpenBackoffEnabled      bool              `json:"half_open_backoff_enabled,omitempty"`
+	HalfOpenBackoffCapMs        int               `json:"half_open_backoff_cap_ms,omitempty"`
+	HalfOpenIndeterminatePolicy HalfOpenPolicy    `json:"half_open_indeterminate_policy,omitempty"`
+	RecoveryWindowMs            int               `json:"recovery_window_ms,omitempty"`
+	RecoveryAllowRateRampSteps  int               `json:"recovery_allow_rate_ramp_steps,omitempty"`
+	Actions                     map[string]any    `json:"actions,omitempty"`
+	Metadata                    map[string]string `json:"metadata,omitempty"`
 }
 
 // CreateBreakerInput contains fields for creating a breaker.
@@ -185,14 +185,14 @@ type CreateBreakerInput struct {
 	WindowMs                    int               `json:"window_ms,omitempty"`
 	MinCount                    int               `json:"min_count,omitempty"`
 	MinStateDurationMs          int               `json:"min_state_duration_ms,omitempty"`
-	CooldownMs                      int               `json:"cooldown_ms,omitempty"`
-	EvalIntervalMs                  int               `json:"eval_interval_ms,omitempty"`
-	HalfOpenBackoffEnabled          bool              `json:"half_open_backoff_enabled,omitempty"`
-	HalfOpenBackoffCapMs            int               `json:"half_open_backoff_cap_ms,omitempty"`
-	HalfOpenIndeterminatePolicy     HalfOpenPolicy    `json:"half_open_indeterminate_policy,omitempty"`
-	RecoveryAllowRateRampSteps      int               `json:"recovery_allow_rate_ramp_steps,omitempty"`
-	Actions                         map[string]any    `json:"actions,omitempty"`
-	Metadata                        map[string]string `json:"metadata,omitempty"`
+	CooldownMs                  int               `json:"cooldown_ms,omitempty"`
+	EvalIntervalMs              int               `json:"eval_interval_ms,omitempty"`
+	HalfOpenBackoffEnabled      bool              `json:"half_open_backoff_enabled,omitempty"`
+	HalfOpenBackoffCapMs        int               `json:"half_open_backoff_cap_ms,omitempty"`
+	HalfOpenIndeterminatePolicy HalfOpenPolicy    `json:"half_open_indeterminate_policy,omitempty"`
+	RecoveryAllowRateRampSteps  int               `json:"recovery_allow_rate_ramp_steps,omitempty"`
+	Actions                     map[string]any    `json:"actions,omitempty"`
+	Metadata                    map[string]string `json:"metadata,omitempty"`
 }
 
 // UpdateBreakerInput contains fields for updating a breaker.
@@ -207,14 +207,14 @@ type UpdateBreakerInput struct {
 	WindowMs                    *int              `json:"window_ms,omitempty"`
 	MinCount                    *int              `json:"min_count,omitempty"`
 	MinStateDurationMs          *int              `json:"min_state_duration_ms,omitempty"`
-	CooldownMs                      *int              `json:"cooldown_ms,omitempty"`
-	EvalIntervalMs                  *int              `json:"eval_interval_ms,omitempty"`
-	HalfOpenBackoffEnabled          *bool             `json:"half_open_backoff_enabled,omitempty"`
-	HalfOpenBackoffCapMs            *int              `json:"half_open_backoff_cap_ms,omitempty"`
-	HalfOpenIndeterminatePolicy     *HalfOpenPolicy   `json:"half_open_indeterminate_policy,omitempty"`
-	RecoveryAllowRateRampSteps      *int              `json:"recovery_allow_rate_ramp_steps,omitempty"`
-	Actions                         map[string]any    `json:"actions,omitempty"`
-	Metadata                        map[string]string `json:"metadata,omitempty"`
+	CooldownMs                  *int              `json:"cooldown_ms,omitempty"`
+	EvalIntervalMs              *int              `json:"eval_interval_ms,omitempty"`
+	HalfOpenBackoffEnabled      *bool             `json:"half_open_backoff_enabled,omitempty"`
+	HalfOpenBackoffCapMs        *int              `json:"half_open_backoff_cap_ms,omitempty"`
+	HalfOpenIndeterminatePolicy *HalfOpenPolicy   `json:"half_open_indeterminate_policy,omitempty"`
+	RecoveryAllowRateRampSteps  *int              `json:"recovery_allow_rate_ramp_steps,omitempty"`
+	Actions                     map[string]any    `json:"actions,omitempty"`
+	Metadata                    map[string]string `json:"metadata,omitempty"`
 }
 
 // SyncBreakersInput contains a list of breakers for bulk sync.
@@ -224,9 +224,9 @@ type SyncBreakersInput struct {
 
 // BreakerState represents the current state of a circuit breaker.
 type BreakerState struct {
-	BreakerID string  `json:"breaker_id"`
-	State     string  `json:"state"` // "open", "closed", "half_open"
-	AllowRate float64 `json:"allow_rate"`
+	BreakerID string    `json:"breaker_id"`
+	State     string    `json:"state"` // "open", "closed", "half_open"
+	AllowRate float64   `json:"allow_rate"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -255,14 +255,14 @@ const (
 
 // Router represents a router configuration.
 type Router struct {
-	ID           string     `json:"id"`
-	Name         string     `json:"name"`
-	Mode         RouterMode `json:"mode"`
-	Enabled      bool       `json:"enabled"`
-	BreakerCount int        `json:"breaker_count,omitempty"`
-	Breakers     []Breaker  `json:"breakers,omitempty"`
-	InsertedAt   time.Time  `json:"inserted_at,omitempty"`
-	CreatedBy    string     `json:"created_by,omitempty"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Mode         RouterMode        `json:"mode"`
+	Enabled      bool              `json:"enabled"`
+	BreakerCount int               `json:"breaker_count,omitempty"`
+	Breakers     []Breaker         `json:"breakers,omitempty"`
+	InsertedAt   time.Time         `json:"inserted_at,omitempty"`
+	CreatedBy    string            `json:"created_by,omitempty"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
 }
 
@@ -273,20 +273,20 @@ type ListRoutersResponse struct {
 
 // CreateRouterInput contains fields for creating a router.
 type CreateRouterInput struct {
-	Name        string     `json:"name"`
-	Description string     `json:"description,omitempty"`
-	Mode        RouterMode `json:"mode"`
-	Enabled     bool       `json:"enabled,omitempty"`
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Mode        RouterMode        `json:"mode"`
+	Enabled     bool              `json:"enabled,omitempty"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 // UpdateRouterInput contains fields for updating a router.
 // Use Ptr() to set optional fields.
 type UpdateRouterInput struct {
-	Name        *string     `json:"name,omitempty"`
-	Description *string     `json:"description,omitempty"`
-	Mode        *RouterMode `json:"mode,omitempty"`
-	Enabled     *bool       `json:"enabled,omitempty"`
+	Name        *string           `json:"name,omitempty"`
+	Description *string           `json:"description,omitempty"`
+	Mode        *RouterMode       `json:"mode,omitempty"`
+	Enabled     *bool             `json:"enabled,omitempty"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
@@ -338,10 +338,10 @@ type CreateNotificationChannelInput struct {
 // UpdateNotificationChannelInput contains fields for updating a notification channel.
 // Use Ptr() to set optional fields.
 type UpdateNotificationChannelInput struct {
-	Name    *string                  `json:"name,omitempty"`
-	Config  map[string]any           `json:"config,omitempty"`
-	Events  []NotificationEventType  `json:"events,omitempty"`
-	Enabled *bool                    `json:"enabled,omitempty"`
+	Name    *string                 `json:"name,omitempty"`
+	Config  map[string]any          `json:"config,omitempty"`
+	Events  []NotificationEventType `json:"events,omitempty"`
+	Enabled *bool                   `json:"enabled,omitempty"`
 }
 
 // Event represents a breaker state transition event.
