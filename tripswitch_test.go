@@ -194,6 +194,70 @@ func TestClose(t *testing.T) {
 	}
 }
 
+// TestClose_FlushesBufferedSamples verifies that samples buffered in the flusher's
+// batch are delivered when Close() is called, even though c.ctx is cancelled at that
+// point. Previously, sendBatch checked c.ctx.Err() and dropped immediately on shutdown.
+func TestClose_FlushesBufferedSamples(t *testing.T) {
+	var ingestCalls int32
+	ingestReceived := make(chan struct{}, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/projects/proj_test/ingest" {
+			atomic.AddInt32(&ingestCalls, 1)
+			select {
+			case ingestReceived <- struct{}{}:
+			default:
+			}
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(context.Background(), "proj_test",
+		WithBaseURL(server.URL),
+		WithIngestSecret("aabbccddee11223344556677889900aabbccddeeff11223344556677889900aa"),
+		withSSEDisabled(),
+		withMetadataSyncDisabled(),
+	)
+	if err != nil {
+		t.Fatalf("NewClient() returned error: %v", err)
+	}
+
+	client.breakerStatesMu.Lock()
+	client.breakerStates["test-breaker"] = breakerState{State: "closed", AllowRate: 1.0}
+	client.breakerStatesMu.Unlock()
+
+	_, _ = Execute(client, context.Background(), func() (int, error) {
+		return 1, nil
+	}, WithBreakers("test-breaker"), WithRouter("router-1"), WithMetrics(map[string]any{"latency": Latency}))
+
+	// Wait for the flusher goroutine to drain reportChan into its batch.
+	// The flusher is in a tight select loop so 50ms is conservative.
+	time.Sleep(50 * time.Millisecond)
+
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer closeCancel()
+	if err := client.Close(closeCtx); err != nil {
+		t.Fatalf("Close() returned error: %v", err)
+	}
+
+	select {
+	case <-ingestReceived:
+	default:
+		t.Fatal("ingest endpoint was not called during shutdown flush: samples were dropped instead of sent")
+	}
+
+	if n := atomic.LoadInt32(&ingestCalls); n != 1 {
+		t.Errorf("expected 1 ingest call, got %d", n)
+	}
+
+	if dropped := atomic.LoadUint64(&client.droppedSamples); dropped != 0 {
+		t.Errorf("expected 0 dropped samples, got %d", dropped)
+	}
+}
+
 func TestStats(t *testing.T) {
 	// Start a mock SSE server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -826,7 +890,7 @@ func TestSendBatch_PayloadFormat(t *testing.T) {
 		},
 	}
 
-	client.sendBatch(batch)
+	client.sendBatch(context.Background(), batch)
 
 	// Verify path and headers
 	if receivedPath != "/v1/projects/proj_test/ingest" {
@@ -1933,7 +1997,7 @@ func TestStats_FlushFailures(t *testing.T) {
 		},
 	}
 
-	client.sendBatch(batch)
+	client.sendBatch(context.Background(), batch)
 
 	stats := client.Stats()
 	if stats.FlushFailures != 1 {
