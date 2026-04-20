@@ -165,6 +165,7 @@ type Client struct {
 	reportChan     chan reportEntry
 	droppedSamples uint64 // atomic counter for dropped samples
 	httpClient     *http.Client
+	closeCtxCh     chan context.Context // receives Close()'s ctx once; read by flusher for shutdown flush
 
 	// metadata cache
 	metaMu           sync.RWMutex
@@ -198,6 +199,7 @@ func NewClient(ctx context.Context, projectID string, opts ...Option) (*Client, 
 		breakerStates: make(map[string]breakerState),
 		sseReady:      make(chan struct{}),
 		reportChan:    make(chan reportEntry, 10000),
+		closeCtxCh:   make(chan context.Context, 1),
 		httpClient:    &http.Client{Timeout: 30 * time.Second},
 		metaSyncInterval: 30 * time.Second,
 	}
@@ -748,6 +750,10 @@ func (c *Client) Report(input ReportInput) {
 func (c *Client) Close(ctx context.Context) error {
 	var err error
 	c.closeOnce.Do(func() {
+		// Deliver the caller's context to the flusher before cancelling c.ctx.
+		// The channel send synchronizes-before the Done() receive in startFlusher,
+		// so there is no data race on the context value.
+		c.closeCtxCh <- ctx
 		// Signal all goroutines to stop
 		c.cancel()
 
@@ -1097,7 +1103,7 @@ func (c *Client) startFlusher() {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
-	flush := func() {
+	flush := func(ctx context.Context) {
 		if len(batch) == 0 {
 			return
 		}
@@ -1105,7 +1111,7 @@ func (c *Client) startFlusher() {
 		c.wg.Add(1)
 		go func(b []reportEntry) {
 			defer c.wg.Done()
-			c.sendBatch(b)
+			c.sendBatch(ctx, b)
 		}(batch)
 		batch = make([]reportEntry, 0, 500)
 		ticker.Reset(15 * time.Second)
@@ -1114,21 +1120,25 @@ func (c *Client) startFlusher() {
 	for {
 		select {
 		case <-c.ctx.Done():
-			flush() // Final drain on shutdown
+			// Receive the context delivered by Close() before cancel() was called.
+			// The buffered send in Close() always precedes the cancel(), so this
+			// receive is guaranteed to succeed without blocking.
+			shutdownCtx := <-c.closeCtxCh
+			flush(shutdownCtx)
 			return
 		case entry := <-c.reportChan:
 			batch = append(batch, entry)
 			if len(batch) >= 500 {
-				flush()
+				flush(c.ctx)
 			}
 		case <-ticker.C:
-			flush()
+			flush(c.ctx)
 		}
 	}
 }
 
 // sendBatch sends a batch of samples to the metrics ingest endpoint.
-func (c *Client) sendBatch(batch []reportEntry) {
+func (c *Client) sendBatch(ctx context.Context, batch []reportEntry) {
 	if len(batch) == 0 {
 		return
 	}
@@ -1186,8 +1196,7 @@ func (c *Client) sendBatch(batch []reportEntry) {
 	url := c.baseURL + "/v1/projects/" + c.projectID + "/ingest"
 
 	for attempt := 0; attempt <= len(backoffs); attempt++ {
-		// Don't retry if context is cancelled (shutdown in progress)
-		if c.ctx.Err() != nil {
+		if ctx.Err() != nil {
 			c.logger.Debug("batch send cancelled due to shutdown", "remaining", len(batch))
 			atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
 			return
@@ -1196,14 +1205,14 @@ func (c *Client) sendBatch(batch []reportEntry) {
 		if attempt > 0 {
 			select {
 			case <-time.After(backoffs[attempt-1]):
-			case <-c.ctx.Done():
+			case <-ctx.Done():
 				c.logger.Debug("batch send cancelled during backoff", "remaining", len(batch))
 				atomic.AddUint64(&c.droppedSamples, uint64(len(batch)))
 				return
 			}
 		}
 
-		req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, url, bytes.NewReader(wireBytes))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(wireBytes))
 		if err != nil {
 			c.logger.Error("failed to create request", "error", err)
 			continue
@@ -1220,7 +1229,7 @@ func (c *Client) sendBatch(batch []reportEntry) {
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			// Don't log error if context was cancelled
-			if c.ctx.Err() == nil {
+			if ctx.Err() == nil {
 				c.logger.Error("failed to send batch", "error", err, "attempt", attempt+1)
 			}
 			continue
