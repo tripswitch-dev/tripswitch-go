@@ -165,7 +165,7 @@ type Client struct {
 	reportChan     chan reportEntry
 	droppedSamples uint64 // atomic counter for dropped samples
 	httpClient     *http.Client
-	closeCtx       context.Context // set in Close() before cancelling c.ctx; used by shutdown flush
+	closeCtxCh     chan context.Context // receives Close()'s ctx once; read by flusher for shutdown flush
 
 	// metadata cache
 	metaMu           sync.RWMutex
@@ -199,6 +199,7 @@ func NewClient(ctx context.Context, projectID string, opts ...Option) (*Client, 
 		breakerStates: make(map[string]breakerState),
 		sseReady:      make(chan struct{}),
 		reportChan:    make(chan reportEntry, 10000),
+		closeCtxCh:   make(chan context.Context, 1),
 		httpClient:    &http.Client{Timeout: 30 * time.Second},
 		metaSyncInterval: 30 * time.Second,
 	}
@@ -749,9 +750,10 @@ func (c *Client) Report(input ReportInput) {
 func (c *Client) Close(ctx context.Context) error {
 	var err error
 	c.closeOnce.Do(func() {
-		// Store the caller's context before cancelling c.ctx so the shutdown
-		// flush can make HTTP requests within the caller's deadline.
-		c.closeCtx = ctx
+		// Deliver the caller's context to the flusher before cancelling c.ctx.
+		// The channel send synchronizes-before the Done() receive in startFlusher,
+		// so there is no data race on the context value.
+		c.closeCtxCh <- ctx
 		// Signal all goroutines to stop
 		c.cancel()
 
@@ -1118,7 +1120,11 @@ func (c *Client) startFlusher() {
 	for {
 		select {
 		case <-c.ctx.Done():
-			flush(c.closeCtx) // Final drain uses Close()'s context so HTTP can complete
+			// Receive the context delivered by Close() before cancel() was called.
+			// The buffered send in Close() always precedes the cancel(), so this
+			// receive is guaranteed to succeed without blocking.
+			shutdownCtx := <-c.closeCtxCh
+			flush(shutdownCtx)
 			return
 		case entry := <-c.reportChan:
 			batch = append(batch, entry)
